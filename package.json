@@ -1,0 +1,8 @@
+{
+  "name": "volatilidad-nocturna",
+  "version": "1.0.0",
+  "main": "volatilidadNocturna.js",
+  "dependencies": {
+    "firebase-admin": "^12.6.0"
+  }
+}
