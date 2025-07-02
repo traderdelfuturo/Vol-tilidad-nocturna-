@@ -27,10 +27,14 @@ function randomDelay() {
   return Math.floor(Math.random() * (7000 - 300 + 1)) + 300;
 }
 
-// Movimiento aleatorio de 0.10 a 0.49 pips (decimales de EUR/USD)
+// Movimiento aleatorio de 0.10 a 0.49 pips => 0.00010 a 0.00049 (EUR/USD)
 function randomMovimiento() {
-  const pips = (Math.random() * (0.49 - 0.10) + 0.10);
-  return +(pips).toFixed(2);
+  // Calcula en fracciones de pip
+  const pips = (Math.random() * (0.49 - 0.10) + 0.10); // pips entre 0.10 y 0.49
+  const direction = Math.random() < 0.5 ? -1 : 1;
+  // Un pip es 0.00010
+  const movimiento = direction * +(pips * 0.00010).toFixed(5); 
+  return movimiento;
 }
 
 async function ciclo() {
@@ -62,12 +66,13 @@ async function ciclo() {
   const last = M1[lastIdx];
   if (!last) return setTimeout(ciclo, 2000);
 
-  // Decide dirección aleatoria y magnitud realista (estructura asiática: muchos rangos pequeños, ocasional salto)
-  let cambio = randomMovimiento() * (Math.random() < 0.5 ? -1 : 1);
+  // Movimiento exacto en rango pip realista
+  let cambio = randomMovimiento();
 
-  // Estructura “realista”: de vez en cuando (cada 15 a 25 movimientos), haz que el movimiento sea el máximo permitido
+  // Ocasionalmente, el máximo permitido (0.49 pip)
   if (Math.floor(Math.random() * 20) === 0) {
-    cambio = (Math.random() < 0.5 ? -1 : 1) * 0.49;
+    const direction = Math.random() < 0.5 ? -1 : 1;
+    cambio = direction * 0.00049;
   }
 
   // Calcula el nuevo cierre
@@ -80,7 +85,7 @@ async function ciclo() {
   };
 
   console.log(
-    `🕒 Movimiento: ${cambio > 0 ? '+' : ''}${cambio.toFixed(2)} pips`,
+    `🕒 Movimiento: ${cambio > 0 ? '+' : ''}${(cambio / 0.00010).toFixed(2)} pips (${cambio.toFixed(5)})`,
     `Hora Bogotá: ${hora}:${String(minuto).padStart(2, '0')}`
   );
   await ref.child(lastIdx).update(updated);
