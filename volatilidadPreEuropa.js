@@ -28,7 +28,6 @@ function randomDelay() {
 }
 
 // Movimiento aleatorio: entre 0.19 y 0.93 pips (90% más que la asiática)
-// 0.10 * 1.9 = 0.19 ; 0.49 * 1.9 = 0.93
 function randomMovimiento() {
   const pips = (Math.random() * (0.93 - 0.19) + 0.19);
   const direction = Math.random() < 0.5 ? -1 : 1;
@@ -57,12 +56,12 @@ async function ciclo() {
     return setTimeout(ciclo, 10000);
   }
 
+  // Optimización: lee solo la última vela
   const ref = db.ref("market_data/M1");
-  const snap = await ref.once("value");
+  const query = ref.orderByKey().limitToLast(1);
+  const snap = await query.once("value");
   const M1 = snap.val() || {};
-
-  const claves = Object.keys(M1).map(Number).sort((a, b) => a - b);
-  const lastIdx = claves[claves.length - 1];
+  const lastIdx = Object.keys(M1)[0];
   const last = M1[lastIdx];
   if (!last) return setTimeout(ciclo, 2000);
 
