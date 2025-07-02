@@ -18,15 +18,15 @@ function randomDelay() {
   return Math.floor(Math.random() * (5000 - 200 + 1)) + 200;
 }
 
-// Movimiento aleatorio, pero movimientos de 0.70 a 0.93 son rarísimos
+// Movimiento aleatorio, menos volátil en la parte alta (máx 0.84)
 function randomMovimiento() {
   let pips;
-  // 96% de las veces, entre 0.19 y 0.70
+  // 96% de las veces, entre 0.19 y 0.59 (bajé el máximo a 0.59)
   if (Math.random() < 0.96) {
-    pips = Math.random() * (0.70 - 0.19) + 0.19;
+    pips = Math.random() * (0.59 - 0.19) + 0.19;
   } else {
-    // Solo 4% de las veces, entre 0.70 y 0.93
-    pips = Math.random() * (0.93 - 0.70) + 0.70;
+    // 4% de las veces, entre 0.59 y 0.84 (movimientos grandes y raros)
+    pips = Math.random() * (0.84 - 0.59) + 0.59;
   }
   const direction = Math.random() < 0.5 ? -1 : 1;
   // Un pip es 0.00010
@@ -66,10 +66,10 @@ async function ciclo() {
   // Movimiento realista
   let cambio = randomMovimiento();
 
-  // Máximo permitido (0.93 pips) ahora aún más raro: solo 1 vez cada 100 movimientos
-  if (Math.floor(Math.random() * 100) === 0) {
+  // El máximo de 0.84 pips solo ocurre 1 vez cada 39 movimientos (~2.56%)
+  if (Math.floor(Math.random() * 39) === 0) {
     const direction = Math.random() < 0.5 ? -1 : 1;
-    cambio = direction * 0.93 * 0.00010;
+    cambio = direction * 0.84 * 0.00010;
   }
 
   // Nuevo cierre
