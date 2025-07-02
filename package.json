@@ -1,7 +1,7 @@
 {
   "name": "volatilidad-nocturna",
   "version": "1.0.0",
-  "main": "volatilidadNocturna.js",
+  "main": "index.js",
   "dependencies": {
     "firebase-admin": "^12.6.0"
   }
