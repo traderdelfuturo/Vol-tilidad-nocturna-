@@ -1,13 +1,4 @@
-const admin = require("firebase-admin");
-
-// Lee la clave desde la variable de entorno en Railway
-const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://datos-de-mercado-ofa-level-3-default-rtdb.firebaseio.com"
-});
-
+const admin = require("./firebaseApp");
 const db = admin.database();
 
 // Utilidad para obtener hora y minuto de Bogotá
@@ -57,7 +48,7 @@ async function ciclo() {
     return setTimeout(ciclo, 10000);
   }
 
-  // 🔥 Optimización: lee solo la última vela
+  // Solo la última vela (ahorra lecturas/costos)
   const ref = db.ref("market_data/M1");
   const query = ref.orderByKey().limitToLast(1);
   const snap = await query.once("value");
