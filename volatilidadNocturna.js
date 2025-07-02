@@ -13,41 +13,47 @@ function tsBogota() {
   return { hora, minuto };
 }
 
-// Tiempo aleatorio entre 0.20 y 5 segundos
+// Tiempo aleatorio entre 0.3 y 7 segundos
 function randomDelay() {
-  return Math.floor(Math.random() * (5000 - 200 + 1)) + 200;
+  return Math.floor(Math.random() * (7000 - 300 + 1)) + 300;
 }
 
-// Movimiento aleatorio: entre 0.19 y 0.93 pips (90% más que la asiática)
+// Movimiento aleatorio: máximo bajado un 29%
 function randomMovimiento() {
-  const pips = (Math.random() * (0.93 - 0.19) + 0.19);
+  let pips;
+  // 95% de las veces, entre 0.10 y 0.28 (antes era 0.39, 0.39 - 29% ≈ 0.277)
+  if (Math.random() < 0.95) {
+    pips = Math.random() * (0.277 - 0.10) + 0.10;
+  } else {
+    // 5% de las veces, entre 0.28 y 0.35 (antes era 0.39-0.49, ahora 0.277-0.348)
+    pips = Math.random() * (0.348 - 0.277) + 0.277;
+  }
   const direction = Math.random() < 0.5 ? -1 : 1;
-  // Un pip es 0.00010
-  const movimiento = direction * +(pips * 0.00010).toFixed(6);
+  const movimiento = direction * +(pips * 0.00010).toFixed(6); 
   return movimiento;
 }
 
 async function ciclo() {
-  const configSnap = await db.ref("config/auto_volatilidad_pre_europa").once("value");
+  const configSnap = await db.ref("config/auto_volatilidad_noche").once("value");
   const habilitado = configSnap.val();
   if (!habilitado) {
-    console.log("Volatilidad Pre-Europa desactivada (flag)");
+    console.log("Volatilidad nocturna desactivada (flag)");
     return setTimeout(ciclo, 5000);
   }
 
-  // Hora y minuto actuales en Bogotá
+  // Obtén hora y minuto actuales en Bogotá
   const { hora, minuto } = tsBogota();
-
-  // Horario: de 23:40 pm hasta 7:00 am
   const dentroHorario =
-    (hora > 23 || hora < 7) || (hora === 23 && minuto >= 40);
+    (hora > 18 && hora < 23) ||
+    (hora === 18 && minuto >= 0) ||
+    (hora === 23 && minuto <= 40);
 
   if (!dentroHorario) {
-    console.log("Fuera del horario 23:40 a 07:00 Bogotá");
+    console.log("Fuera del horario 18:00 a 23:40 Bogotá");
     return setTimeout(ciclo, 10000);
   }
 
-  // Solo consulta la última vela (para ahorrar)
+  // Optimización: lee solo la última vela
   const ref = db.ref("market_data/M1");
   const query = ref.orderByKey().limitToLast(1);
   const snap = await query.once("value");
@@ -56,17 +62,17 @@ async function ciclo() {
   const last = M1[lastIdx];
   if (!last) return setTimeout(ciclo, 2000);
 
-  // Movimiento realista
+  // Movimiento exacto en rango pip realista
   let cambio = randomMovimiento();
 
-  // Ocasionalmente, el máximo permitido (0.93 pips)
-  if (Math.floor(Math.random() * 20) === 0) {
+  // Máximo absoluto permitido (0.348 pips, 29% menos que 0.49), solo 1 de cada 45 movimientos
+  if (Math.floor(Math.random() * 45) === 0) {
     const direction = Math.random() < 0.5 ? -1 : 1;
-    cambio = direction * 0.93 * 0.00010;
+    cambio = direction * 0.348 * 0.00010;
   }
 
-  // Nuevo cierre
-  const nuevoClose = +(last.close + cambio).toFixed(5);
+  // Calcula el nuevo cierre
+  const nuevoClose = +(last.close + cambio).toFixed(5); // 5 decimales, estándar EUR/USD
   const updated = {
     ...last,
     close: nuevoClose,
