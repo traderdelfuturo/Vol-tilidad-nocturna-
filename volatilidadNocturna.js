@@ -1,6 +1,7 @@
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./serviceAccountKey.json");
+// Lee la clave desde la variable de entorno en Railway
+const serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
