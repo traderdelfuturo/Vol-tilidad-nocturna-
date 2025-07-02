@@ -18,9 +18,16 @@ function randomDelay() {
   return Math.floor(Math.random() * (5000 - 200 + 1)) + 200;
 }
 
-// Movimiento aleatorio: entre 0.19 y 0.93 pips (90% más que la asiática)
+// Movimiento aleatorio, pero movimientos de 0.70 a 0.93 son rarísimos
 function randomMovimiento() {
-  const pips = (Math.random() * (0.93 - 0.19) + 0.19);
+  let pips;
+  // 96% de las veces, entre 0.19 y 0.70
+  if (Math.random() < 0.96) {
+    pips = Math.random() * (0.70 - 0.19) + 0.19;
+  } else {
+    // Solo 4% de las veces, entre 0.70 y 0.93
+    pips = Math.random() * (0.93 - 0.70) + 0.70;
+  }
   const direction = Math.random() < 0.5 ? -1 : 1;
   // Un pip es 0.00010
   const movimiento = direction * +(pips * 0.00010).toFixed(6);
@@ -47,7 +54,7 @@ async function ciclo() {
     return setTimeout(ciclo, 10000);
   }
 
-  // Optimización: lee solo la última vela
+  // Lee solo la última vela
   const ref = db.ref("market_data/M1");
   const query = ref.orderByKey().limitToLast(1);
   const snap = await query.once("value");
@@ -59,8 +66,8 @@ async function ciclo() {
   // Movimiento realista
   let cambio = randomMovimiento();
 
-  // Ocasionalmente, el máximo permitido (0.93 pips)
-  if (Math.floor(Math.random() * 20) === 0) {
+  // Máximo permitido (0.93 pips) ahora aún más raro: solo 1 vez cada 100 movimientos
+  if (Math.floor(Math.random() * 100) === 0) {
     const direction = Math.random() < 0.5 ? -1 : 1;
     cambio = direction * 0.93 * 0.00010;
   }
