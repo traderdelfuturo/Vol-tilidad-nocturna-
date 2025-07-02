@@ -27,7 +27,7 @@ function randomDelay() {
   return Math.floor(Math.random() * (7000 - 300 + 1)) + 300;
 }
 
-// Movimiento aleatorio de 0.10 a 0.49 pips => 0.00010 a 0.00049 (EUR/USD)
+// Movimiento aleatorio de 0.10 a 0.49 pips => 0.00001 a 0.000049 (EUR/USD)
 function randomMovimiento() {
   // Calcula en fracciones de pip
   const pips = (Math.random() * (0.49 - 0.10) + 0.10); // pips entre 0.10 y 0.49
@@ -72,7 +72,7 @@ async function ciclo() {
   // Ocasionalmente, el máximo permitido (0.49 pip)
   if (Math.floor(Math.random() * 20) === 0) {
     const direction = Math.random() < 0.5 ? -1 : 1;
-    cambio = direction * 0.00049;
+    cambio = direction * 0.49 * 0.00010;  // <<--- CORREGIDO
   }
 
   // Calcula el nuevo cierre
