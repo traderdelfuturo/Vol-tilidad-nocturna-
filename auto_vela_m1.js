@@ -34,7 +34,7 @@ async function ciclo() {
   const hora = parseInt(horaCol, 10);
 
   // SOLO entre 17:00 y 15:59 (5PM a 3:59PM, pausa 16:00–16:59)
-  if (hora >= 1 || hora < 18) {
+  if (hora >= 17 || hora < 16) {
     const t = tsBogotaSeg();
     const ref = db.ref('market_data/M1');
     const snap = await ref.orderByKey().limitToLast(1).once('value');
