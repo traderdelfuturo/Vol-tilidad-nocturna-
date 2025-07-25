@@ -62,4 +62,4 @@ process.on("unhandledRejection", err => {
 });
 
 console.log("🚀 Auto Resumen TF iniciado");
-ciclo();.
+ciclo();
