@@ -1,3 +1,4 @@
+// resumen_tf_incremental.js
 const admin = require("./firebaseApp");
 const db    = admin.database();
 
@@ -29,43 +30,48 @@ function agrupar(chunk) {
   return { open, high, low, close, time };
 }
 
-async function fullBuild() {
-  const m1 = await cargarM1();
-  if (!m1.length) {
-    console.log("Sin M1, nada que hacer.");
-    return;
-  }
+async function ciclo() {
+  try {
+    // Flag para apagar/prender desde la DB
+    const cfgSnap = await db.ref("config/auto_resumen_tf").once("value");
+    const habilitado = cfgSnap.exists() ? cfgSnap.val() : true;
+    if (!habilitado) return setTimeout(ciclo, 60_000);
 
-  for (const tf of TEMPORALIDADES) {
-    const total = Math.floor(m1.length / tf.size);
-    const refTF = db.ref(`market_data/${tf.nombre}`);
+    const m1 = await cargarM1();
+    if (!m1.length) return setTimeout(ciclo, 60_000);
 
-    // Limpia la rama
-    await refTF.set(null);
+    for (const tf of TEMPORALIDADES) {
+      const size  = tf.size;
+      const refTF = db.ref(`market_data/${tf.nombre}`);
 
-    let batch = {};
-    let count = 0;
-    for (let i = 0; i < total; i++) {
-      const chunk = m1.slice(i * tf.size, (i + 1) * tf.size);
-      batch[i] = agrupar(chunk);
-      count++;
-      if (count === 500) {
-        await refTF.update(batch);
-        batch = {};
-        count = 0;
+      // último índice ya creado
+      const lastSnap = await refTF.orderByKey().limitToLast(1).once("value");
+      let nextIdx = 0;
+      if (lastSnap.exists()) {
+        const lastKey = Object.keys(lastSnap.val())[0];
+        nextIdx = Number(lastKey) + 1;
+      }
+
+      const start = nextIdx * size;
+      if (start + size > m1.length) continue; // aún no hay bloque completo
+
+      const updates = {};
+      for (let i = start; i + size <= m1.length; i += size) {
+        const chunk = m1.slice(i, i + size);
+        updates[nextIdx++] = agrupar(chunk);
+      }
+
+      if (Object.keys(updates).length) {
+        await refTF.update(updates);
+        console.log(`➕ ${tf.nombre}: +${Object.keys(updates).length} velas nuevas`);
       }
     }
-    if (count) await refTF.update(batch);
-
-    console.log(`✅ ${tf.nombre}: ${total} velas creadas`);
+  } catch (e) {
+    console.error("🔥 ERROR incremental:", e);
   }
 
-  // Marca opcional para saber que ya hiciste el full
-  await db.ref("config/resumen_tf_full_built").set(true);
-  console.log("✅ FULL BUILD terminado.");
+  setTimeout(ciclo, 60_000); // vuelve a correr en 1 min
 }
 
-// Ejecuta y cierra
-fullBuild()
-  .then(()=>process.exit(0))
-  .catch(e=>{ console.error("🔥 ERROR FULL BUILD:", e); process.exit(1); });
+console.log("🚀 Resumen TF incremental activo");
+ciclo();
