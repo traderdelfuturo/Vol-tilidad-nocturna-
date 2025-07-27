@@ -11,14 +11,21 @@ const bucket = (ts, size) => Math.floor(ts / size) * size;
 function startRollup() {
   const refM1 = db.ref("market_data/M1");
 
-  // Escucha SOLO la última vela que vaya entrando
+  // Escucha nueva vela M1
   refM1.orderByKey().limitToLast(1).on("child_added", snap => {
     const vela = snap.val();
     if (!vela || typeof vela.time !== "number") return;
-    rollupToAllTF(vela).catch(err => console.error("🔥 rollup error:", err));
+    rollupToAllTF(vela).catch(err => console.error("🔥 rollup ADD error:", err));
   });
 
-  console.log("🚀 Rollup TF escuchando M1...");
+  // Escucha cambios en la vela viva M1 (actualizaciones en tiempo real)
+  refM1.orderByKey().limitToLast(1).on("child_changed", snap => {
+    const vela = snap.val();
+    if (!vela || typeof vela.time !== "number") return;
+    rollupToAllTF(vela).catch(err => console.error("🔥 rollup CHANGE error:", err));
+  });
+
+  console.log("🚀 Rollup TF escuchando M1 (added + changed)...");
 }
 
 async function rollupToAllTF(velaM1) {
