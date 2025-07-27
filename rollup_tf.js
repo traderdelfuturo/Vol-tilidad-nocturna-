@@ -3,7 +3,19 @@ const admin = require("./firebaseApp");
 const db = admin.database();
 
 // segundos por TF
-const TF = { M5:300, M15:900, M30:1800, H1:3600, H4:14400, D1:86400 };
+const TF = {
+  M5:   300,
+  M15:  900,
+  M30:  1800,
+  H1:   3600,
+  H2:   7200,
+  H4:   14400,
+  H8:   28800,
+  H12:  43200,
+  D1:   86400,
+  W1:   604800,
+  MN:   2592000 // ~30 días
+};
 
 // Bucket por tiempo (segundos)
 const bucket = (ts, size) => Math.floor(ts / size) * size;
