@@ -28,6 +28,7 @@ function randomMovimiento() {
     // 4% de las veces, entre 0.52 y 0.66 (movimientos fuertes)
     pips = Math.random() * (0.667 - 0.52) + 0.52;
   }
+  pips = pips * 2.0; // AUMENTO DEL 200%
   const direction = Math.random() < 0.5 ? -1 : 1;
   const movimiento = direction * +(pips * 0.00010).toFixed(6);
   return movimiento;
@@ -70,7 +71,7 @@ async function ciclo() {
   // Ocasionalmente, el máximo absoluto (0.667 pips) solo 1 de cada 40 movimientos
   if (Math.floor(Math.random() * 40) === 0) {
     const direction = Math.random() < 0.5 ? -1 : 1;
-    cambio = direction * 0.667 * 0.00010;
+    cambio = direction * (0.667 * 2.0) * 0.00010; // AUMENTO DEL 200%
   }
 
   // Nuevo cierre
