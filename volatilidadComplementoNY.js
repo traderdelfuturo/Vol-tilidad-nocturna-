@@ -18,9 +18,9 @@ function randomDelay() {
   return Math.floor(Math.random() * (5000 - 150 + 1)) + 150;
 }
 
-// Movimiento aleatorio: entre 0.13 y 0.67 pips, AUMENTADO 200%
+// Movimiento aleatorio: entre 0.13 y 0.67 pips, AUMENTADO 480%
 function randomMovimiento() {
-  const pips = (Math.random() * (0.67 - 0.13) + 0.13) * 2.0; // 0.13 a 0.67 pips, x2.0
+  const pips = (Math.random() * (0.67 - 0.13) + 0.13) * 4.8; // 0.13 a 0.67 pips, x4.8
   const direction = Math.random() < 0.5 ? -1 : 1;
   const movimiento = direction * +(pips * 0.00010).toFixed(6);
   return movimiento;
@@ -63,7 +63,7 @@ async function ciclo() {
   // Ocasionalmente, el máximo permitido (0.67 pips)
   if (Math.floor(Math.random() * 20) === 0) {
     const direction = Math.random() < 0.5 ? -1 : 1;
-    cambio = direction * (0.67 * 2.0) * 0.00010; // x2.0
+    cambio = direction * (0.67 * 4.8) * 0.00010; // x4.8
   }
 
   // Nuevo cierre
