@@ -33,24 +33,39 @@ function randomMovimiento() {
 }
 
 // =======================================================================
-// INICIO: NUEVA FUNCIÓN ASÍNCRONA PARA EL RECORRIDO LÍQUIDO
+// INICIO: FUNCIÓN PARA EL RECORRIDO LÍQUIDO (VERSIÓN ULTRARRÁPIDA)
 // =======================================================================
 async function executeLiquidMove(ref, lastIdx, startCandle, targetClose) {
     const startClose = startCandle.close;
     const totalMovement = targetClose - startClose;
-    const numberOfSteps = 10;
-    const stepDelay = 20; // 20ms entre pasos (Total: 200ms)
-    const pricePerStep = totalMovement / numberOfSteps;
 
+    // --- PARÁMETROS DE VELOCIDAD MÁXIMA ---
+    const numberOfSteps = 10; // 10 Pasos
+    const stepDelay = 5;      // 5ms de pausa (Total: 10 * 5 = 50ms)
+    // --- FIN AJUSTES ---
+
+    // Evitar división por cero si no hay movimiento
+    if (Math.abs(totalMovement) < 0.00000001) {
+        // Si no hay movimiento, solo actualiza una vez para asegurar el estado final
+        await ref.child(lastIdx).update({
+             ...startCandle,
+             close: targetClose,
+             high: Math.max(startCandle.high, targetClose),
+             low: Math.min(startCandle.low, targetClose)
+        });
+        return { ...startCandle, close: targetClose, high: Math.max(startCandle.high, targetClose), low: Math.min(startCandle.low, targetClose) };
+    }
+
+    const pricePerStep = totalMovement / numberOfSteps;
     let currentHigh = startCandle.high;
     let currentLow = startCandle.low;
     let currentClose = startCandle.close;
+    let updatePromises = []; // Array para guardar las promesas de actualización
 
     for (let i = 1; i <= numberOfSteps; i++) {
-        // Calcular el precio del paso actual
         let intermediateClose;
         if (i === numberOfSteps) {
-            intermediateClose = targetClose; // Asegurar el precio final exacto
+            intermediateClose = targetClose;
         } else {
             intermediateClose = +(startClose + pricePerStep * i).toFixed(5); // Usar 5 decimales
         }
@@ -60,25 +75,33 @@ async function executeLiquidMove(ref, lastIdx, startCandle, targetClose) {
         currentLow = Math.min(currentLow, currentClose);
 
         const updatedStep = {
-            ...startCandle, // Mantener open y time originales de la vela
+            ...startCandle, // Mantener open y time originales
             close: currentClose,
             high: currentHigh,
             low: currentLow
         };
 
-        // Enviar la actualización a Firebase
-        await ref.child(lastIdx).update(updatedStep);
+        // Enviar la actualización a Firebase SIN await para máxima velocidad
+        // Guardamos la promesa para asegurar que al menos se envíe
+        updatePromises.push(ref.child(lastIdx).update(updatedStep));
 
-        // Esperar brevemente antes del siguiente paso (excepto en el último)
+        // Pausa ultracorta antes del siguiente paso
         if (i < numberOfSteps) {
             await new Promise(resolve => setTimeout(resolve, stepDelay));
         }
     }
-     // Devolver la vela final actualizada por si se necesita
-     return { ...startCandle, close: targetClose, high: currentHigh, low: currentLow };
+
+    // Esperar a que todas las actualizaciones se hayan enviado (aunque no necesariamente completado)
+    await Promise.all(updatePromises);
+
+    // Asegurar el estado final con una última actualización CON await
+    const finalCandle = { ...startCandle, close: targetClose, high: currentHigh, low: currentLow };
+    await ref.child(lastIdx).update(finalCandle);
+
+    return finalCandle;
 }
 // =======================================================================
-// FIN: NUEVA FUNCIÓN
+// FIN: FUNCIÓN DE RECORRIDO
 // =======================================================================
 
 
@@ -97,7 +120,7 @@ async function ciclo() {
     (hora === 23 && minuto <= 40);
 
   if (!dentroHorario) {
-    console.log("Fuera del horario 18:00 a 23:40 Bogotá");
+    console.log(`Fuera del horario 18:00 a 23:40 Bogotá (${hora}:${String(minuto).padStart(2, '0')})`);
     return setTimeout(ciclo, 10000);
   }
   // --- Fin Lógica de habilitación y horario ---
@@ -105,11 +128,21 @@ async function ciclo() {
   // --- Lectura de la última vela (sin cambios) ---
   const ref = db.ref("market_data/M1");
   const query = ref.orderByKey().limitToLast(1);
-  const snap = await query.once("value");
+  let snap;
+  try {
+      snap = await query.once("value");
+  } catch (error) {
+      console.error("Error al leer de Firebase:", error);
+      return setTimeout(ciclo, 5000); // Reintentar después de un error
+  }
+
   const M1 = snap.val() || {};
   const lastIdx = Object.keys(M1)[0];
   const last = M1[lastIdx];
-  if (!last) return setTimeout(ciclo, 2000);
+  if (!last || typeof last.close !== 'number') { // Verificar que 'last' y 'last.close' existan y sean válidos
+      console.warn("Última vela no encontrada o inválida. Reintentando...");
+      return setTimeout(ciclo, 2000);
+  }
   // --- Fin Lectura de la última vela ---
 
   // --- Cálculo del movimiento (sin cambios) ---
@@ -125,14 +158,29 @@ async function ciclo() {
   // INICIO: MODIFICACIÓN - LLAMAR A LA FUNCIÓN DE RECORRIDO
   // =======================================================================
   console.log(
-    `💧 Iniciando recorrido: ${cambio > 0 ? '+' : ''}${(cambio / 0.00010).toFixed(2)} pips (${cambio.toFixed(6)})`,
+    `💧 Iniciando recorrido rápido: ${cambio > 0 ? '+' : ''}${(cambio / 0.00010).toFixed(2)} pips (${cambio.toFixed(6)})`,
     `Hora Bogotá: ${hora}:${String(minuto).padStart(2, '0')}`
   );
 
-  // En lugar de hacer un solo update, ejecutamos el recorrido líquido
-  await executeLiquidMove(ref, lastIdx, last, nuevoClose);
-
-  console.log(`✅ Recorrido completado a ${nuevoClose.toFixed(5)}`);
+  try {
+      // Ejecutamos el recorrido líquido ultrarrápido
+      await executeLiquidMove(ref, lastIdx, last, nuevoClose);
+      console.log(`✅ Recorrido completado a ${nuevoClose.toFixed(5)}`);
+  } catch (error) {
+      console.error("Error durante executeLiquidMove:", error);
+      // Opcional: intentar una actualización directa si la animación falla
+      try {
+          await ref.child(lastIdx).update({
+              ...last,
+              close: nuevoClose,
+              high: Math.max(last.high, nuevoClose),
+              low: Math.min(last.low, nuevoClose)
+          });
+           console.warn("Recorrido falló, se aplicó actualización directa.");
+      } catch (updateError) {
+          console.error("Error en actualización directa tras fallo de recorrido:", updateError);
+      }
+  }
   // =======================================================================
   // FIN: MODIFICACIÓN
   // =======================================================================
@@ -143,4 +191,11 @@ async function ciclo() {
   setTimeout(ciclo, delay);
 }
 
-ciclo();
+// Iniciar el ciclo con manejo de errores inicial
+try {
+    ciclo();
+} catch (initialError) {
+    console.error("Error al iniciar el ciclo:", initialError);
+    // Intentar reiniciar después de un breve retraso
+    setTimeout(ciclo, 10000);
+}
