@@ -6,6 +6,8 @@ require("./volatilidadCierre.js"); // <--- NUEVA LÍNEA AÑADIDA
 require("./auto_vela_m1.js");
 require("./auto_vela_5s.js"); 
 require("./market_tf_backfill.js");
+require("./market_tf_live");
+
 
 // Borré las líneas de startRollup porque ya eliminaste el archivo.
 
