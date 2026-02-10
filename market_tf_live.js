@@ -1,60 +1,15 @@
-/**
- * ISS - Live Aggregator de temporalidades (desde market_data/M1)
- * -------------------------------------------------------------
- * Mantiene actualizado en tiempo real:
- *   M5, M15, M30, H1, H2, H4, H8, H12, D1, W1, MN
- *
- * Cómo ejecutar (Railway):
- *   node market_tf_live.js
- *
- * Recomendación:
- * - Ejecuta PRIMERO el backfill (market_tf_backfill.js) una vez.
- * - Luego deja corriendo este LIVE 24/7.
- *
- * Variables opcionales:
- *   MARKET_ROOT="market_data" (default)
- *   FLUSH_MS=150  -> cada cuánto escribe al DB (debounce). 100-250 suele ir perfecto.
- */
-
 "use strict";
 
-// -----------------------------
-// Firebase init (flexible)
-// -----------------------------
-let admin;
-try {
-  admin = require("./firebaseApp");
-  if (admin && admin.admin) admin = admin.admin;
-  if (admin && admin.default) admin = admin.default;
-} catch (e) {
-  admin = require("firebase-admin");
-  if (!admin.apps.length) {
-    const svc = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-      ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
-      : null;
-    const dbUrl = process.env.FIREBASE_DB_URL;
-    if (!svc || !dbUrl) {
-      throw new Error(
-        "Falta firebaseApp.js o variables FIREBASE_SERVICE_ACCOUNT_JSON y FIREBASE_DB_URL."
-      );
-    }
-    admin.initializeApp({
-      credential: admin.credential.cert(svc),
-      databaseURL: dbUrl,
-    });
-  }
-}
-
+const admin = require("./firebaseApp");
 const db = admin.database();
 
-// -----------------------------
-// Config
-// -----------------------------
-const MARKET_ROOT = process.env.MARKET_ROOT || "market_data";
+// ==============================
+// CONFIG BASE
+// ==============================
+const MARKET_ROOT = "market_data";
 const SOURCE_PATH = `${MARKET_ROOT}/M1`;
 
-const FLUSH_MS = Math.max(50, Math.min(2000, Number(process.env.FLUSH_MS || 150)));
-
+// Temporalidades destino
 const TFS = [
   { code: "M5",  type: "fixed", sec: 300 },
   { code: "M15", type: "fixed", sec: 900 },
@@ -69,9 +24,9 @@ const TFS = [
   { code: "MN",  type: "month" },
 ];
 
-// -----------------------------
-// Utils
-// -----------------------------
+// ==============================
+// UTILS
+// ==============================
 function toNum(v) {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
@@ -81,7 +36,6 @@ function startOfDayUTC(timeSec) {
   const d = new Date(timeSec * 1000);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
 }
-
 function startOfWeekUTC_Monday(timeSec) {
   const d = new Date(timeSec * 1000);
   const day = d.getUTCDay(); // 0..6 (Sun..Sat)
@@ -89,12 +43,10 @@ function startOfWeekUTC_Monday(timeSec) {
   const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
   return dayStart - (daysSinceMonday * 86400);
 }
-
 function startOfMonthUTC(timeSec) {
   const d = new Date(timeSec * 1000);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / 1000;
 }
-
 function bucketStart(timeSec, tf) {
   if (tf.type === "fixed") return Math.floor(timeSec / tf.sec) * tf.sec;
   if (tf.type === "day") return startOfDayUTC(timeSec);
@@ -103,146 +55,179 @@ function bucketStart(timeSec, tf) {
   return Math.floor(timeSec / 60) * 60;
 }
 
-// -----------------------------
-// Live aggregator (debounced)
-// -----------------------------
-const pending = new Map();          // "TF|bucket" -> candle
-const aggCache = new Map();         // "TF|bucket" -> candle (mutable)
-const currentBucketByTF = new Map(); // TF -> bucket
-let flushTimer = null;
-let lastEventAt = 0;
+// ==============================
+// ESTADO LIVE (solo vela actual)
+// ==============================
+const state = new Map(); // tf.code -> { bucket:number, candle:{...}, lastWriteMs:number, dirty:boolean }
 
-async function ensureAgg(tfCode, bucket, m1) {
-  const k = `${tfCode}|${bucket}`;
-  if (aggCache.has(k)) return aggCache.get(k);
+let running = false;
+let m1Query = null;
 
-  const snap = await db.ref(`${MARKET_ROOT}/${tfCode}/${bucket}`).once("value");
-  let c;
-  if (snap.exists()) {
-    c = snap.val() || {};
-  } else {
-    c = { time: bucket, open: m1.open, high: m1.high, low: m1.low, close: m1.close, lastSrcTime: m1.time };
-  }
-  aggCache.set(k, c);
-  return c;
-}
+// Throttle dinámico desde config
+let THROTTLE_MS = 80;
 
-function scheduleFlush() {
-  if (flushTimer) return;
-  flushTimer = setTimeout(async () => {
-    flushTimer = null;
-    try {
-      await flushNow();
-    } catch (err) {
-      console.error("❌ flush error:", err);
-    }
-  }, FLUSH_MS);
-}
-
-async function flushNow() {
-  if (pending.size === 0) return;
-
-  const updates = {};
-  for (const [key, candle] of pending.entries()) {
-    const [tfCode, bucket] = key.split("|");
-    updates[`${MARKET_ROOT}/${tfCode}/${bucket}`] = candle;
-  }
-
-  pending.clear();
-  await db.ref().update(updates);
-
+// ==============================
+// WRITE (barato): un solo update multi-path
+// ==============================
+async function flushDirty(force = false) {
   const now = Date.now();
-  if (now - lastEventAt > 1500) {
-    console.log(`💾 flush OK (${Object.keys(updates).length} writes)`);
-  }
-}
+  const updates = {};
+  let count = 0;
 
-async function processM1(m1) {
   for (const tf of TFS) {
-    const bucket = bucketStart(m1.time, tf);
+    const s = state.get(tf.code);
+    if (!s) continue;
 
-    const prevBucket = currentBucketByTF.get(tf.code);
-    if (prevBucket !== bucket && prevBucket != null) {
-      // Cambio de bucket => forzar flush para no perder el cierre del anterior
-      await flushNow();
-      // limpiar caches viejos
-      aggCache.delete(`${tf.code}|${prevBucket}`);
-      pending.delete(`${tf.code}|${prevBucket}`);
-    }
-    currentBucketByTF.set(tf.code, bucket);
+    const due = force || (now - (s.lastWriteMs || 0) >= THROTTLE_MS);
+    if (!s.dirty || !due) continue;
 
-    const agg = await ensureAgg(tf.code, bucket, m1);
-
-    // Asegurar estructura
-    if (toNum(agg.open) === null) agg.open = m1.open;
-    agg.time = bucket;
-
-    const high = toNum(agg.high);
-    const low = toNum(agg.low);
-    agg.high = Math.max(high ?? m1.high, m1.high);
-    agg.low  = Math.min(low  ?? m1.low,  m1.low);
-
-    const lastSrc = toNum(agg.lastSrcTime) ?? 0;
-    if (m1.time >= lastSrc) {
-      agg.close = m1.close;
-      agg.lastSrcTime = m1.time;
-    }
-
-    pending.set(`${tf.code}|${bucket}`, { ...agg });
+    updates[`${MARKET_ROOT}/${tf.code}/${String(s.bucket)}`] = s.candle;
+    s.lastWriteMs = now;
+    s.dirty = false;
+    count++;
   }
 
-  scheduleFlush();
+  if (count > 0) {
+    await db.ref().update(updates);
+  }
 }
 
-function parseM1(v, key) {
-  if (!v) return null;
+// ==============================
+// ACTUALIZA VELA TF con tick M1
+// ==============================
+function applyTickToTF(tf, m1) {
+  const b = bucketStart(m1.time, tf);
+  const code = tf.code;
+
+  const s = state.get(code);
+
+  // Si cambia el bucket, “cerramos” la anterior (último flush forzado) y abrimos nueva
+  if (!s || s.bucket !== b) {
+    if (s) {
+      // marcar cierre (opcional)
+      // s.candle.isClosed = true;
+      s.dirty = true;
+    }
+
+    state.set(code, {
+      bucket: b,
+      candle: {
+        time: b,
+        open: m1.open,
+        high: m1.high,
+        low: m1.low,
+        close: m1.close,
+        lastSrcTime: m1.time,
+      },
+      lastWriteMs: 0,
+      dirty: true,
+    });
+
+    return;
+  }
+
+  // Mismo bucket: actualizar OHLC “en tiempo real”
+  const c = s.candle;
+
+  c.high = Math.max(toNum(c.high) ?? m1.high, m1.high);
+  c.low  = Math.min(toNum(c.low)  ?? m1.low,  m1.low);
+
+  // close: siempre el último tick (tu M1 se actualiza muchas veces)
+  const lastSrc = toNum(c.lastSrcTime) ?? 0;
+  if (m1.time >= lastSrc) {
+    c.close = m1.close;
+    c.lastSrcTime = m1.time;
+  }
+
+  s.dirty = true;
+}
+
+// ==============================
+// HANDLER M1 (última vela viva)
+// ==============================
+async function onM1Snap(childSnap) {
+  const v = childSnap.val() || {};
   const time = toNum(v.time);
   const open = toNum(v.open);
   const high = toNum(v.high);
   const low  = toNum(v.low);
   const close= toNum(v.close);
-  if (time === null || open === null || high === null || low === null || close === null) return null;
-  return { time, open, high, low, close, key };
+
+  if (time === null || open === null || high === null || low === null || close === null) return;
+
+  const m1 = { time, open, high, low, close };
+
+  // Actualizar estado para todas las TFs
+  for (const tf of TFS) applyTickToTF(tf, m1);
+
+  // Escribir barato: solo velas actuales, con throttle
+  try {
+    await flushDirty(false);
+  } catch (e) {
+    console.error("❌ flushDirty error:", e);
+  }
 }
 
-async function start() {
-  console.log("===============================================");
-  console.log("ISS Live TF Aggregator (desde M1)");
-  console.log("ROOT:", MARKET_ROOT);
-  console.log("SOURCE:", SOURCE_PATH);
-  console.log("FLUSH_MS:", FLUSH_MS);
-  console.log("TFS:", TFS.map(t => t.code).join(", "));
-  console.log("===============================================");
+// ==============================
+// START/STOP listeners
+// ==============================
+function startLive() {
+  if (running) return;
+  running = true;
 
-  const q = db.ref(SOURCE_PATH).limitToLast(1);
+  console.log("🟢 TF LIVE ON (escuchando última M1 en tiempo real)");
 
-  const handler = async (snap) => {
-    lastEventAt = Date.now();
-    const m1 = parseM1(snap.val(), snap.key);
-    if (!m1) return;
-    try {
-      await processM1(m1);
-    } catch (err) {
-      console.error("❌ processM1 error:", err);
-    }
-  };
+  // Escucha SOLO la última vela de M1:
+  // - child_added: primera vez
+  // - child_changed: cuando tú actualizas close/high/low en esa misma vela
+  m1Query = db.ref(SOURCE_PATH).orderByKey().limitToLast(1);
 
-  q.on("child_added", handler);
-  q.on("child_changed", handler);
-
-  // Graceful shutdown
-  const shutdown = async () => {
-    try {
-      console.log("🧯 shutdown... flushing pending");
-      await flushNow();
-    } catch {}
-    process.exit(0);
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  // Importante: usar las mismas referencias de función para poder off()
+  m1Query.on("child_added", onM1Snap, err => console.error("child_added err:", err));
+  m1Query.on("child_changed", onM1Snap, err => console.error("child_changed err:", err));
 }
 
-start().catch(err=>{
-  console.error("❌ Error al iniciar LIVE:", err);
-  process.exit(1);
-});
+async function stopLive() {
+  if (!running) return;
+  running = false;
+
+  console.log("🛑 TF LIVE OFF (apagado por flag)");
+
+  try {
+    // flush final por si quedó algo sucio
+    await flushDirty(true);
+  } catch (e) {}
+
+  if (m1Query) {
+    m1Query.off("child_added", onM1Snap);
+    m1Query.off("child_changed", onM1Snap);
+    m1Query = null;
+  }
+}
+
+// ==============================
+// CICLO CONTROLADO POR CONFIG (tu mismo estilo)
+// ==============================
+async function ciclo() {
+  try {
+    const [flagSnap, thrSnap] = await Promise.all([
+      db.ref("config/auto_tf_live").once("value"),
+      db.ref("config/tf_live_throttle_ms").once("value"),
+    ]);
+
+    const enabled = !!flagSnap.val();
+    const thr = toNum(thrSnap.val());
+    if (thr !== null) THROTTLE_MS = Math.max(0, Math.min(5000, thr));
+
+    if (enabled) startLive();
+    else await stopLive();
+
+  } catch (e) {
+    console.error("❌ ciclo config error:", e);
+  }
+
+  // Chequeo rápido para poder apagar/encender sin delay grande
+  setTimeout(ciclo, 1500);
+}
+
+ciclo();
