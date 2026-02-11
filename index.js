@@ -8,7 +8,6 @@ require("./auto_vela_5s.js");
 require("./market_tf_backfill.js");
 require("./market_tf_live_barato");
 
-
 // Borré las líneas de startRollup porque ya eliminaste el archivo.
 
 process.on("unhandledRejection", err => console.error("❌ Unhandled:", err));
