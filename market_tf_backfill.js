@@ -8,21 +8,23 @@ const db = admin.database();
 // ============================
 const MARKET_ROOT = "market_data";
 const SOURCE_PATH = `${MARKET_ROOT}/M1`;
-const BATCH_SIZE = 5000;
+const BATCH_SIZE = 5000; // (no lo usas aquí, pero lo dejo por consistencia)
 
 // ============================
 // TEMPORALIDADES
 // ============================
 const TFS = [
-  { code: "M5", sec: 300 },
+  { code: "M5",  sec: 300 },
   { code: "M15", sec: 900 },
   { code: "M30", sec: 1800 },
-  { code: "H1", sec: 3600 },
-  { code: "H2", sec: 7200 },
-  { code: "H4", sec: 14400 },
-  { code: "H8", sec: 28800 },
+  { code: "H1",  sec: 3600 },
+  { code: "H2",  sec: 7200 },
+  { code: "H4",  sec: 14400 },
+  { code: "H8",  sec: 28800 },
   { code: "H12", sec: 43200 },
-  { code: "D1", sec: 86400 },
+  { code: "D1",  sec: 86400 },
+  { code: "W1",  sec: 604800 },
+  { code: "MN",  sec: 2592000 }, // ~30 días (igual que tu rollup)
 ];
 
 // ============================
@@ -50,6 +52,7 @@ async function runBackfill() {
     return;
   }
 
+  // Ordenar por time
   const m1 = Object.values(rows)
     .filter(v => v && typeof v.time === "number")
     .sort((a, b) => a.time - b.time);
@@ -58,6 +61,14 @@ async function runBackfill() {
   for (const tf of TFS) acc[tf.code] = {};
 
   for (const c of m1) {
+    // seguridad: si falta OHLC no agregamos
+    if (
+      typeof c.open !== "number" ||
+      typeof c.high !== "number" ||
+      typeof c.low  !== "number" ||
+      typeof c.close!== "number"
+    ) continue;
+
     for (const tf of TFS) {
       const b = bucket(c.time, tf.sec);
       const ref = acc[tf.code][b];
@@ -67,12 +78,12 @@ async function runBackfill() {
           time: b,
           open: c.open,
           high: c.high,
-          low: c.low,
-          close: c.close,
+          low:  c.low,
+          close:c.close,
         };
       } else {
-        ref.high = Math.max(ref.high, c.high);
-        ref.low = Math.min(ref.low, c.low);
+        ref.high  = Math.max(ref.high, c.high);
+        ref.low   = Math.min(ref.low,  c.low);
         ref.close = c.close;
       }
     }
