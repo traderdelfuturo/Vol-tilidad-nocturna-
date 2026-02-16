@@ -1,27 +1,51 @@
 const admin = require("./firebaseApp"); // << Importa desde firebaseApp.js
 const db = admin.database();
+const crypto = require("crypto");
+
+// ======================================================
+// CSPRNG (crypto) helpers: reemplazo de Math.random()
+// ======================================================
+const TWO_POW_53 = 9007199254740992; // 2^53
+
+// Float uniforme en [0, 1) con 53 bits (similar resolución a Math.random, pero CSPRNG)
+function cryptoRandomFloat() {
+  const x = crypto.randomBytes(8).readBigUInt64BE() >> 11n; // 53 bits
+  return Number(x) / TWO_POW_53;
+}
+
+// Dirección 50/50 (CSPRNG)
+function randomDirection() {
+  return crypto.randomInt(0, 2) === 0 ? -1 : 1;
+}
+
+// 1 de cada 20 (CSPRNG)
+function oneIn20() {
+  return crypto.randomInt(0, 20) === 0; // 0..19
+}
 
 // Utilidad para obtener hora y minuto de Bogotá (sin cambios)
 function tsBogota() {
-  const iso = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'America/Bogota',
+  const iso = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Bogota",
     hour12: false,
-    hour: '2-digit',
-    minute: '2-digit'
+    hour: "2-digit",
+    minute: "2-digit",
   }).format(new Date());
-  const [hora, minuto] = iso.split(':').map(Number);
+  const [hora, minuto] = iso.split(":").map(Number);
   return { hora, minuto };
 }
 
-// Tiempo aleatorio entre 0.15 y 5 segundos (sin cambios)
+// Tiempo aleatorio entre 0.15 y 5 segundos (CSPRNG)
 function randomDelay() {
-  return Math.floor(Math.random() * (5000 - 150 + 1)) + 150;
+  // Equivalente a: Math.floor(Math.random() * (5000 - 150 + 1)) + 150;
+  return crypto.randomInt(150, 5000 + 1); // max exclusivo
 }
 
-// Movimiento aleatorio: entre 0.13 y 0.67 pips, AUMENTADO 480% (sin cambios)
+// Movimiento aleatorio: entre 0.13 y 0.67 pips, AUMENTADO 480% (CSPRNG)
 function randomMovimiento() {
-  const pips = (Math.random() * (0.67 - 0.13) + 0.13) * 4.8; // 0.13 a 0.67 pips, x4.8
-  const direction = Math.random() < 0.5 ? -1 : 1;
+  const r = cryptoRandomFloat(); // 0..1
+  const pips = (r * (0.67 - 0.13) + 0.13) * 4.8; // 0.13 a 0.67 pips, x4.8
+  const direction = randomDirection();
   const movimiento = direction * +(pips * 0.00010).toFixed(6);
   return movimiento;
 }
@@ -31,61 +55,71 @@ function randomMovimiento() {
 // (Exactamente la misma función que en los scripts anteriores)
 // =======================================================================
 async function executeLiquidMove(ref, lastIdx, startCandle, targetClose) {
-    const startClose = startCandle.close;
-    const totalMovement = targetClose - startClose;
+  const startClose = startCandle.close;
+  const totalMovement = targetClose - startClose;
 
-    // --- PARÁMETROS DE VELOCIDAD MÁXIMA ---
-    const numberOfSteps = 10; // 10 Pasos
-    const stepDelay = 5;      // 5ms de pausa (Total: 10 * 5 = 50ms)
-    // --- FIN AJUSTES ---
+  // --- PARÁMETROS DE VELOCIDAD MÁXIMA ---
+  const numberOfSteps = 10; // 10 Pasos
+  const stepDelay = 5; // 5ms de pausa (Total: 10 * 5 = 50ms)
+  // --- FIN AJUSTES ---
 
-    if (Math.abs(totalMovement) < 0.00000001) {
-        await ref.child(lastIdx).update({
-             ...startCandle,
-             close: targetClose,
-             high: Math.max(startCandle.high, targetClose),
-             low: Math.min(startCandle.low, targetClose)
-        });
-        return { ...startCandle, close: targetClose, high: Math.max(startCandle.high, targetClose), low: Math.min(startCandle.low, targetClose) };
+  if (Math.abs(totalMovement) < 0.00000001) {
+    await ref.child(lastIdx).update({
+      ...startCandle,
+      close: targetClose,
+      high: Math.max(startCandle.high, targetClose),
+      low: Math.min(startCandle.low, targetClose),
+    });
+    return {
+      ...startCandle,
+      close: targetClose,
+      high: Math.max(startCandle.high, targetClose),
+      low: Math.min(startCandle.low, targetClose),
+    };
+  }
+
+  const pricePerStep = totalMovement / numberOfSteps;
+  let currentHigh = startCandle.high;
+  let currentLow = startCandle.low;
+  let currentClose = startCandle.close;
+  let updatePromises = [];
+
+  for (let i = 1; i <= numberOfSteps; i++) {
+    let intermediateClose;
+    if (i === numberOfSteps) {
+      intermediateClose = targetClose;
+    } else {
+      intermediateClose = +(startClose + pricePerStep * i).toFixed(5); // Usar 5 decimales
     }
 
-    const pricePerStep = totalMovement / numberOfSteps;
-    let currentHigh = startCandle.high;
-    let currentLow = startCandle.low;
-    let currentClose = startCandle.close;
-    let updatePromises = [];
+    currentClose = intermediateClose;
+    currentHigh = Math.max(currentHigh, currentClose);
+    currentLow = Math.min(currentLow, currentClose);
 
-    for (let i = 1; i <= numberOfSteps; i++) {
-        let intermediateClose;
-        if (i === numberOfSteps) {
-            intermediateClose = targetClose;
-        } else {
-            intermediateClose = +(startClose + pricePerStep * i).toFixed(5); // Usar 5 decimales
-        }
+    const updatedStep = {
+      ...startCandle,
+      close: currentClose,
+      high: currentHigh,
+      low: currentLow,
+    };
 
-        currentClose = intermediateClose;
-        currentHigh = Math.max(currentHigh, currentClose);
-        currentLow = Math.min(currentLow, currentClose);
+    updatePromises.push(ref.child(lastIdx).update(updatedStep));
 
-        const updatedStep = {
-            ...startCandle,
-            close: currentClose,
-            high: currentHigh,
-            low: currentLow
-        };
-
-        updatePromises.push(ref.child(lastIdx).update(updatedStep));
-
-        if (i < numberOfSteps) {
-            await new Promise(resolve => setTimeout(resolve, stepDelay));
-        }
+    if (i < numberOfSteps) {
+      await new Promise((resolve) => setTimeout(resolve, stepDelay));
     }
-    await Promise.all(updatePromises);
+  }
+  await Promise.all(updatePromises);
 
-    const finalCandle = { ...startCandle, close: targetClose, high: currentHigh, low: currentLow };
-    await ref.child(lastIdx).update(finalCandle);
+  const finalCandle = {
+    ...startCandle,
+    close: targetClose,
+    high: currentHigh,
+    low: currentLow,
+  };
+  await ref.child(lastIdx).update(finalCandle);
 
-    return finalCandle;
+  return finalCandle;
 }
 // =======================================================================
 // FIN: FUNCIÓN DE RECORRIDO
@@ -93,12 +127,15 @@ async function executeLiquidMove(ref, lastIdx, startCandle, targetClose) {
 
 async function ciclo() {
   // --- Lógica de habilitación y horario (sin cambios) ---
-  const configSnap = await db.ref("config/auto_volatilidad_complemento_ny").once("value");
+  const configSnap = await db
+    .ref("config/auto_volatilidad_complemento_ny")
+    .once("value");
   const habilitado = configSnap.val();
   if (!habilitado) {
     console.log("Volatilidad Complemento NY desactivada (flag)");
     return setTimeout(ciclo, 5000);
   }
+
   const { hora, minuto } = tsBogota();
   // Horario: de 8:00 am a 16:00 pm Bogotá
   const dentroHorario =
@@ -106,7 +143,9 @@ async function ciclo() {
     (hora === 16 && minuto === 0); // Exactamente las 16:00
 
   if (!dentroHorario) {
-    console.log(`Fuera del horario 08:00 a 16:00 Bogotá (${hora}:${String(minuto).padStart(2, '0')})`);
+    console.log(
+      `Fuera del horario 08:00 a 16:00 Bogotá (${hora}:${String(minuto).padStart(2, "0")})`
+    );
     return setTimeout(ciclo, 10000);
   }
   // --- Fin Lógica de habilitación y horario ---
@@ -115,28 +154,32 @@ async function ciclo() {
   const ref = db.ref("market_data/M1");
   const query = ref.orderByKey().limitToLast(1);
   let snap;
-   try {
-      snap = await query.once("value");
+  try {
+    snap = await query.once("value");
   } catch (error) {
-      console.error("Error al leer de Firebase:", error);
-      return setTimeout(ciclo, 5000); // Reintentar después de un error
+    console.error("Error al leer de Firebase:", error);
+    return setTimeout(ciclo, 5000); // Reintentar después de un error
   }
+
   const M1 = snap.val() || {};
   const lastIdx = Object.keys(M1)[0];
   const last = M1[lastIdx];
-   if (!last || typeof last.close !== 'number') { // Verificar que 'last' y 'last.close' existan y sean válidos
-      console.warn("Última vela no encontrada o inválida. Reintentando...");
-      return setTimeout(ciclo, 2000);
+
+  if (!last || typeof last.close !== "number") {
+    console.warn("Última vela no encontrada o inválida. Reintentando...");
+    return setTimeout(ciclo, 2000);
   }
   // --- Fin Lectura de la última vela ---
 
-  // --- Cálculo del movimiento (sin cambios) ---
+  // --- Cálculo del movimiento (CSPRNG, manteniendo lógica y tamaño) ---
   let cambio = randomMovimiento();
+
   // Ocasionalmente, el máximo permitido (0.67 pips * 4.8) solo 1 de cada 20 movimientos
-  if (Math.floor(Math.random() * 20) === 0) {
-    const direction = Math.random() < 0.5 ? -1 : 1;
+  if (oneIn20()) {
+    const direction = randomDirection();
     cambio = direction * (0.67 * 4.8) * 0.00010; // x4.8
   }
+
   const nuevoClose = +(last.close + cambio).toFixed(5);
   // --- Fin Cálculo del movimiento ---
 
@@ -144,40 +187,40 @@ async function ciclo() {
   // INICIO: MODIFICACIÓN - LLAMAR A LA FUNCIÓN DE RECORRIDO
   // =======================================================================
   console.log(
-    `💧 Iniciando recorrido rápido (NY Comp): ${cambio > 0 ? '+' : ''}${(cambio / 0.00010).toFixed(2)} pips (${cambio.toFixed(6)})`,
-    `Hora Bogotá: ${hora}:${String(minuto).padStart(2, '0')}`
+    `💧 Iniciando recorrido rápido (NY Comp): ${cambio > 0 ? "+" : ""}${(cambio / 0.00010).toFixed(2)} pips (${cambio.toFixed(6)})`,
+    `Hora Bogotá: ${hora}:${String(minuto).padStart(2, "0")}`
   );
 
   try {
-      await executeLiquidMove(ref, lastIdx, last, nuevoClose);
-      console.log(`✅ Recorrido (NY Comp) completado a ${nuevoClose.toFixed(5)}`);
+    await executeLiquidMove(ref, lastIdx, last, nuevoClose);
+    console.log(`✅ Recorrido (NY Comp) completado a ${nuevoClose.toFixed(5)}`);
   } catch (error) {
-      console.error("Error durante executeLiquidMove (NY Comp):", error);
-      try {
-          await ref.child(lastIdx).update({
-              ...last,
-              close: nuevoClose,
-              high: Math.max(last.high, nuevoClose),
-              low: Math.min(last.low, nuevoClose)
-          });
-           console.warn("Recorrido falló (NY Comp), se aplicó actualización directa.");
-      } catch (updateError) {
-          console.error("Error en actualización directa tras fallo (NY Comp):", updateError);
-      }
+    console.error("Error durante executeLiquidMove (NY Comp):", error);
+    try {
+      await ref.child(lastIdx).update({
+        ...last,
+        close: nuevoClose,
+        high: Math.max(last.high, nuevoClose),
+        low: Math.min(last.low, nuevoClose),
+      });
+      console.warn("Recorrido falló (NY Comp), se aplicó actualización directa.");
+    } catch (updateError) {
+      console.error("Error en actualización directa tras fallo (NY Comp):", updateError);
+    }
   }
   // =======================================================================
   // FIN: MODIFICACIÓN
   // =======================================================================
 
-  // --- Programar el siguiente ciclo (sin cambios) ---
+  // --- Programar el siguiente ciclo (CSPRNG) ---
   const delay = randomDelay();
   setTimeout(ciclo, delay);
 }
 
 // Iniciar el ciclo con manejo de errores inicial
 try {
-    ciclo();
+  ciclo();
 } catch (initialError) {
-    console.error("Error al iniciar el ciclo (NY Comp):", initialError);
-    setTimeout(ciclo, 10000);
+  console.error("Error al iniciar el ciclo (NY Comp):", initialError);
+  setTimeout(ciclo, 10000);
 }
