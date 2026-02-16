@@ -142,4 +142,92 @@ async function executeLiquidMove(ref, lastIdx, startCandle, targetClose) {
 // FIN: FUNCIÓN DE RECORRIDO
 // =======================================================================
 
-async f
+async function ciclo() {
+  // --- Lógica de habilitación y horario (sin cambios) ---
+  const configSnap = await db.ref("config/auto_volatilidad_noche").once("value");
+  const habilitado = configSnap.val();
+  if (!habilitado) {
+    console.log("Volatilidad nocturna desactivada (flag)");
+    return setTimeout(ciclo, 5000);
+  }
+
+  const { hora, minuto } = tsBogota();
+  const dentroHorario =
+    (hora > 18 && hora < 23) ||
+    (hora === 18 && minuto >= 0) ||
+    (hora === 23 && minuto <= 40);
+
+  if (!dentroHorario) {
+    console.log(
+      `Fuera del horario 18:00 a 23:40 Bogotá (${hora}:${String(minuto).padStart(2, "0")})`
+    );
+    return setTimeout(ciclo, 10000);
+  }
+  // --- Fin Lógica de habilitación y horario ---
+
+  // --- Lectura de la última vela (sin cambios) ---
+  const ref = db.ref("market_data/M1");
+  const query = ref.orderByKey().limitToLast(1);
+  let snap;
+  try {
+    snap = await query.once("value");
+  } catch (error) {
+    console.error("Error al leer de Firebase:", error);
+    return setTimeout(ciclo, 5000);
+  }
+
+  const M1 = snap.val() || {};
+  const lastIdx = Object.keys(M1)[0];
+  const last = M1[lastIdx];
+
+  if (!last || typeof last.close !== "number") {
+    console.warn("Última vela no encontrada o inválida. Reintentando...");
+    return setTimeout(ciclo, 2000);
+  }
+  // --- Fin Lectura de la última vela ---
+
+  // --- Cálculo del movimiento (CSPRNG + +39% tamaños) ---
+  let cambio = randomMovimiento();
+
+  // Mantiene tu lógica: 1 de cada 45 fuerza el máximo (ahora también +39%)
+  if (oneIn45()) {
+    const direction = randomDirection();
+    cambio = direction * (0.348 * MOVEMENT_MULTIPLIER) * 0.00010;
+  }
+
+  const nuevoClose = +(last.close + cambio).toFixed(5);
+  // --- Fin Cálculo del movimiento ---
+
+  console.log(
+    `💧 Iniciando recorrido rápido: ${cambio > 0 ? "+" : ""}${(cambio / 0.00010).toFixed(2)} pips (${cambio.toFixed(6)})`,
+    `Hora Bogotá: ${hora}:${String(minuto).padStart(2, "0")}`
+  );
+
+  try {
+    await executeLiquidMove(ref, lastIdx, last, nuevoClose);
+    console.log(`✅ Recorrido completado a ${nuevoClose.toFixed(5)}`);
+  } catch (error) {
+    console.error("Error durante executeLiquidMove:", error);
+    try {
+      await ref.child(lastIdx).update({
+        ...last,
+        close: nuevoClose,
+        high: Math.max(last.high, nuevoClose),
+        low: Math.min(last.low, nuevoClose),
+      });
+      console.warn("Recorrido falló, se aplicó actualización directa.");
+    } catch (updateError) {
+      console.error("Error en actualización directa tras fallo de recorrido:", updateError);
+    }
+  }
+
+  const delay = randomDelay();
+  setTimeout(ciclo, delay);
+}
+
+try {
+  ciclo();
+} catch (initialError) {
+  console.error("Error al iniciar el ciclo:", initialError);
+  setTimeout(ciclo, 10000);
+}
