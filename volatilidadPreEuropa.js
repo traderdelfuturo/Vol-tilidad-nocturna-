@@ -231,4 +231,3 @@ try {
   console.error("Error al iniciar el ciclo (Pre-Europa):", initialError);
   setTimeout(ciclo, 10000);
 }
-```0
