@@ -25,10 +25,10 @@ function oneIn39() {
 }
 
 // ======================================================
-// Ajuste pedido: +100% tamaño movimientos (doblar)
-// Manteniendo el efecto del 1.3 original (AUMENTO DEL 130%)
+// Ajuste pedido: +160% tamaño movimientos
+// (sin cambiar nada más: multiplicar por 2.6 sobre tu versión actual)
 // ======================================================
-const MOVEMENT_MULTIPLIER = 1.3 * 2; // antes 1.3, ahora 2.6 (100% más grande que tu versión actual)
+const MOVEMENT_MULTIPLIER = 1.3 * 2 * 2.6; // 6.76
 
 // Utilidad para obtener hora y minuto de Bogotá (sin cambios)
 function tsBogota() {
@@ -47,7 +47,7 @@ function randomDelay() {
   return crypto.randomInt(200, 5000 + 1); // 200..5000
 }
 
-// Movimiento aleatorio (misma lógica, CSPRNG + +100% tamaño)
+// Movimiento aleatorio (misma lógica, CSPRNG + +160% tamaño)
 function randomMovimiento() {
   let pips;
 
@@ -59,7 +59,7 @@ function randomMovimiento() {
     pips = cryptoRandomFloat() * (0.84 - 0.59) + 0.59;
   }
 
-  // Mantiene tu lógica del 1.3, pero ahora +100% adicional (doble)
+  // Solo cambia el tamaño ( +160% sobre tu versión actual )
   pips = pips * MOVEMENT_MULTIPLIER;
 
   const direction = randomDirection();
@@ -126,7 +126,6 @@ async function executeLiquidMove(ref, lastIdx, startCandle, targetClose) {
       await new Promise((resolve) => setTimeout(resolve, stepDelay));
     }
   }
-
   await Promise.all(updatePromises);
 
   const finalCandle = {
@@ -185,13 +184,13 @@ async function ciclo() {
   }
   // --- Fin Lectura de la última vela ---
 
-  // --- Cálculo del movimiento (misma lógica, CSPRNG + +100% tamaño) ---
+  // --- Cálculo del movimiento (misma lógica, CSPRNG + +160% tamaño) ---
   let cambio = randomMovimiento();
 
   // El máximo de 0.84 pips solo ocurre 1 vez cada 39 movimientos (misma lógica, CSPRNG)
   if (oneIn39()) {
     const direction = randomDirection();
-    cambio = direction * (0.84 * MOVEMENT_MULTIPLIER) * 0.00010; // antes (0.84*1.3), ahora (0.84*2.6)
+    cambio = direction * (0.84 * MOVEMENT_MULTIPLIER) * 0.00010;
   }
 
   const nuevoClose = +(last.close + cambio).toFixed(5);
@@ -232,3 +231,4 @@ try {
   console.error("Error al iniciar el ciclo (Pre-Europa):", initialError);
   setTimeout(ciclo, 10000);
 }
+```0
