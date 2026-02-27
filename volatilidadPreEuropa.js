@@ -25,10 +25,9 @@ function oneIn39() {
 }
 
 // ======================================================
-// Ajuste pedido: +160% tamaño movimientos
-// (sin cambiar nada más: multiplicar por 2.6 sobre tu versión actual)
+// Ajuste: -45% tamaño movimientos (x0.55)
 // ======================================================
-const MOVEMENT_MULTIPLIER = 1.3 * 2 * 2.6; // 6.76
+const MOVEMENT_MULTIPLIER = 1.3 * 2 * 2.6 * 0.55; // 3.718
 
 // Utilidad para obtener hora y minuto de Bogotá (sin cambios)
 function tsBogota() {
@@ -47,7 +46,7 @@ function randomDelay() {
   return crypto.randomInt(200, 5000 + 1); // 200..5000
 }
 
-// Movimiento aleatorio (misma lógica, CSPRNG + +160% tamaño)
+// Movimiento aleatorio (misma lógica, CSPRNG)
 function randomMovimiento() {
   let pips;
 
@@ -59,7 +58,7 @@ function randomMovimiento() {
     pips = cryptoRandomFloat() * (0.84 - 0.59) + 0.59;
   }
 
-  // Solo cambia el tamaño ( +160% sobre tu versión actual )
+  // Solo cambia el tamaño (-45%)
   pips = pips * MOVEMENT_MULTIPLIER;
 
   const direction = randomDirection();
@@ -154,7 +153,8 @@ async function ciclo() {
   }
 
   const { hora, minuto } = tsBogota();
-  const dentroHorario = (hora > 23 || hora < 7) || (hora === 23 && minuto >= 40);
+  const dentroHorario =
+    (hora > 23 || hora < 7) || (hora === 23 && minuto >= 40);
 
   if (!dentroHorario) {
     console.log(
@@ -184,7 +184,7 @@ async function ciclo() {
   }
   // --- Fin Lectura de la última vela ---
 
-  // --- Cálculo del movimiento (misma lógica, CSPRNG + +160% tamaño) ---
+  // --- Cálculo del movimiento (misma lógica, CSPRNG) ---
   let cambio = randomMovimiento();
 
   // El máximo de 0.84 pips solo ocurre 1 vez cada 39 movimientos (misma lógica, CSPRNG)
