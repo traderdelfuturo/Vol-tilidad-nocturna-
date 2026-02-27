@@ -24,9 +24,9 @@ function oneIn45() {
 }
 
 // ======================================================
-// Ajuste pedido: +100% tamaño movimientos (doble)
+// Ajuste pedido: -50% tamaño movimientos (mitad)
 // ======================================================
-const MOVEMENT_MULTIPLIER = 3.9 * 1.39 * 2; // 10.842 (doble sobre 5.421)
+const MOVEMENT_MULTIPLIER = 3.9 * 1.39 * 2 * 0.5; // 5.421 (mitad sobre 10.842)
 
 // Utilidad para obtener hora y minuto de Bogotá (sin cambios)
 function tsBogota() {
@@ -45,7 +45,7 @@ function randomDelay() {
   return crypto.randomInt(300, 7000 + 1); // max exclusivo
 }
 
-// Movimiento aleatorio (misma lógica, CSPRNG + +100% tamaño)
+// Movimiento aleatorio (misma lógica, CSPRNG)
 function randomMovimiento() {
   let pips;
 
@@ -56,7 +56,7 @@ function randomMovimiento() {
     pips = cryptoRandomFloat() * (0.348 - 0.277) + 0.277;
   }
 
-  // +100% aplicado aquí (doble sobre la versión anterior)
+  // aplicado aquí (mitad sobre la versión actual)
   pips = pips * MOVEMENT_MULTIPLIER;
 
   // Dirección 50/50 CSPRNG
@@ -186,10 +186,10 @@ async function ciclo() {
   }
   // --- Fin Lectura de la última vela ---
 
-  // --- Cálculo del movimiento (CSPRNG + +100% tamaños) ---
+  // --- Cálculo del movimiento (CSPRNG) ---
   let cambio = randomMovimiento();
 
-  // Mantiene tu lógica: 1 de cada 45 fuerza el máximo (ahora también +100%)
+  // Mantiene tu lógica: 1 de cada 45 fuerza el máximo (ahora también con -50%)
   if (oneIn45()) {
     const direction = randomDirection();
     cambio = direction * (0.348 * MOVEMENT_MULTIPLIER) * 0.00010;
