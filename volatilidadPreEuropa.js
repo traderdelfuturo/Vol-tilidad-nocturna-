@@ -25,9 +25,9 @@ function oneIn39() {
 }
 
 // ======================================================
-// Ajuste: -45% tamaño movimientos (x0.55)
+// Ajuste: +60% tamaño movimientos (x1.6 sobre el tamaño actual)
 // ======================================================
-const MOVEMENT_MULTIPLIER = 1.3 * 2 * 2.6 * 0.55; // 3.718
+const MOVEMENT_MULTIPLIER = 1.3 * 2 * 2.6 * 0.88; // 5.9488
 
 // Utilidad para obtener hora y minuto de Bogotá (sin cambios)
 function tsBogota() {
