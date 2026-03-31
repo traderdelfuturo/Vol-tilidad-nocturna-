@@ -2,7 +2,7 @@ const admin = require("./firebaseApp");
 const db = admin.database();
 
 // Configuración
-const HISTORY_LIMIT = 1600; 
+const HISTORY_LIMIT = 9600; 
 const SECONDS_PER_BAR = 5;
 
 console.log("🚀 MOTOR 5S (ROLLUP STYLE) INICIADO...");
