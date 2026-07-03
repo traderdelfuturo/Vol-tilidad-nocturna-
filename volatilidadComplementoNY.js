@@ -51,75 +51,45 @@ function randomMovimiento() {
 }
 
 // =======================================================================
-// INICIO: FUNCIÓN PARA EL RECORRIDO LÍQUIDO (VERSIÓN ULTRARRÁPIDA)
-// (Exactamente la misma función que en los scripts anteriores)
+// INICIO: FUNCIÓN PARA EL RECORRIDO LÍQUIDO (VERSIÓN RELATIVA ANTI-LATIGAZO)
+// El movimiento ya NO se interpola desde una foto vieja hacia un precio
+// absoluto: cada paso aplica su DELTA sobre el close VIVO vía transacción.
+// Si el libro local corrió el precio entre la lectura y la escritura, el
+// mover ondula alrededor del nivel NUEVO en vez de arrastrarlo de vuelta.
+// El high/low jamás se pisa con valores viejos: se expande contra lo vivo.
 // =======================================================================
-async function executeLiquidMove(ref, lastIdx, startCandle, targetClose) {
-  const startClose = startCandle.close;
-  const totalMovement = targetClose - startClose;
-
-  // --- PARÁMETROS DE VELOCIDAD MÁXIMA ---
+async function executeLiquidMove(ref, lastIdx, deltaTotal) {
+  // --- PARÁMETROS DE VELOCIDAD MÁXIMA (sin cambios) ---
   const numberOfSteps = 10; // 10 Pasos
   const stepDelay = 5; // 5ms de pausa (Total: 10 * 5 = 50ms)
   // --- FIN AJUSTES ---
 
-  if (Math.abs(totalMovement) < 0.00000001) {
-    await ref.child(lastIdx).update({
-      ...startCandle,
-      close: targetClose,
-      high: Math.max(startCandle.high, targetClose),
-      low: Math.min(startCandle.low, targetClose),
-    });
-    return {
-      ...startCandle,
-      close: targetClose,
-      high: Math.max(startCandle.high, targetClose),
-      low: Math.min(startCandle.low, targetClose),
-    };
-  }
-
-  const pricePerStep = totalMovement / numberOfSteps;
-  let currentHigh = startCandle.high;
-  let currentLow = startCandle.low;
-  let currentClose = startCandle.close;
-  let updatePromises = [];
+  const stepDelta = deltaTotal / numberOfSteps;
+  let ultimoClose = null;
 
   for (let i = 1; i <= numberOfSteps; i++) {
-    let intermediateClose;
-    if (i === numberOfSteps) {
-      intermediateClose = targetClose;
-    } else {
-      intermediateClose = +(startClose + pricePerStep * i).toFixed(5); // Usar 5 decimales
+    try {
+      const res = await ref.child(lastIdx).transaction((v) => {
+        if (v === null || typeof v.close !== "number") return v; // la vela rotó o no existe: no tocar
+        const nc = +(v.close + stepDelta).toFixed(5);
+        return {
+          ...v,
+          close: nc,
+          high: Math.max(v.high, nc),
+          low: Math.min(v.low, nc),
+        };
+      });
+      if (res && res.committed && res.snapshot && res.snapshot.exists()) {
+        ultimoClose = res.snapshot.val().close;
+      }
+    } catch (e) {
+      console.error("paso de recorrido falló:", e.message);
     }
-
-    currentClose = intermediateClose;
-    currentHigh = Math.max(currentHigh, currentClose);
-    currentLow = Math.min(currentLow, currentClose);
-
-    const updatedStep = {
-      ...startCandle,
-      close: currentClose,
-      high: currentHigh,
-      low: currentLow,
-    };
-
-    updatePromises.push(ref.child(lastIdx).update(updatedStep));
-
     if (i < numberOfSteps) {
       await new Promise((resolve) => setTimeout(resolve, stepDelay));
     }
   }
-  await Promise.all(updatePromises);
-
-  const finalCandle = {
-    ...startCandle,
-    close: targetClose,
-    high: currentHigh,
-    low: currentLow,
-  };
-  await ref.child(lastIdx).update(finalCandle);
-
-  return finalCandle;
+  return ultimoClose;
 }
 // =======================================================================
 // FIN: FUNCIÓN DE RECORRIDO
@@ -150,7 +120,7 @@ async function ciclo() {
   }
   // --- Fin Lógica de habilitación y horario ---
 
-  // --- Lectura de la última vela (sin cambios) ---
+  // --- Lectura de la última vela (solo para conocer el ÍNDICE vigente) ---
   const ref = db.ref("market_data/M1");
   const query = ref.orderByKey().limitToLast(1);
   let snap;
@@ -179,12 +149,10 @@ async function ciclo() {
     const direction = randomDirection();
     cambio = direction * (0.67 * 4.8) * 0.00010; // x4.8
   }
-
-  const nuevoClose = +(last.close + cambio).toFixed(5);
-  // --- Fin Cálculo del movimiento ---
+  // --- Fin Cálculo del movimiento (el DELTA viaja tal cual, sin ancla absoluta) ---
 
   // =======================================================================
-  // INICIO: MODIFICACIÓN - LLAMAR A LA FUNCIÓN DE RECORRIDO
+  // LLAMADA AL RECORRIDO RELATIVO
   // =======================================================================
   console.log(
     `💧 Iniciando recorrido rápido (NY Comp): ${cambio > 0 ? "+" : ""}${(cambio / 0.00010).toFixed(2)} pips (${cambio.toFixed(6)})`,
@@ -192,24 +160,23 @@ async function ciclo() {
   );
 
   try {
-    await executeLiquidMove(ref, lastIdx, last, nuevoClose);
-    console.log(`✅ Recorrido (NY Comp) completado a ${nuevoClose.toFixed(5)}`);
+    const fin = await executeLiquidMove(ref, lastIdx, cambio);
+    console.log(
+      `✅ Recorrido (NY Comp) completado a ${fin === null ? "(vela rotó)" : fin.toFixed(5)}`
+    );
   } catch (error) {
     console.error("Error durante executeLiquidMove (NY Comp):", error);
     try {
-      await ref.child(lastIdx).update({
-        ...last,
-        close: nuevoClose,
-        high: Math.max(last.high, nuevoClose),
-        low: Math.min(last.low, nuevoClose),
+      await ref.child(lastIdx).transaction((v) => {
+        if (v === null || typeof v.close !== "number") return v;
+        const nc = +(v.close + cambio).toFixed(5);
+        return { ...v, close: nc, high: Math.max(v.high, nc), low: Math.min(v.low, nc) };
       });
-      console.warn("Recorrido falló (NY Comp), se aplicó actualización directa.");
+      console.warn("Recorrido falló (NY Comp), se aplicó delta directo por transacción.");
     } catch (updateError) {
-      console.error("Error en actualización directa tras fallo (NY Comp):", updateError);
+      console.error("Error en delta directo tras fallo (NY Comp):", updateError);
     }
   }
-  // =======================================================================
-  // FIN: MODIFICACIÓN
   // =======================================================================
 
   // --- Programar el siguiente ciclo (CSPRNG) ---
