@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════════════════════
-   VOLATILIDAD · COMPLEMENTO NUEVA YORK — v2
+   VOLATILIDAD · COMPLEMENTO NUEVA YORK — v3
    ═══════════════════════════════════════════════════════════════════════════════════════════
 
    QUÉ CAMBIA Y QUÉ NO.
@@ -54,6 +54,14 @@
    CALIBRACIÓN. Se conserva la ENERGÍA (varianza por unidad de tiempo), que es lo que determina
    el recorrido de la sesión. Antes: 0,38835 eventos/s × 4,5511 pips² = 1,7674 pips²/s. El mismo
    número exacto después. El gráfico recorre lo mismo que siempre; lo que cambia es la textura.
+   v3 · LA VOLATILIDAD PASA A TENER TRES RELOJES. En la v2 la volatilidad tenia UNA sola escala
+   de 45 s, asi que el mercado se olvidaba de si estaba nervioso cada 2-3 minutos y cualquier tramo
+   de diez minutos se parecia a cualquier otro. Ahora son tres escalas que se multiplican (45 s,
+   8 min y 90 min), mas una temperatura por jornada y una estela que deja el golpe grande. Medido
+   con la curva del dia APAGADA -para que no la disfrace la estacionalidad- la memoria real pasa
+   de 0,002 a 0,04-0,06 a los cinco minutos, y sigue viva a los quince. Nada de esto toca la
+   direccion: sigma dice CUANTO se mueve, jamas HACIA DONDE.
+
 
    FIREBASE. Antes: 10 transacciones por movimiento (~112.000 por sesión) más una lectura de
    config por ciclo. Ahora: 1 transacción por impresión, config cacheada 5 s. Aun triplicando el
@@ -114,10 +122,12 @@ const CAL = {
      de la versión anterior (1,7674 pips²/s) con el resto de capas puestas. Bajar la mediana y
      alargar la cola es justo el cambio: antes todo medía ~1,9 pips; ahora la mayoría son ticks
      pequeños y de vez en cuando cae un golpe de 15-40 veces ese tamaño. */
-  MEDIANA_PIPS: 0.262,
+  MEDIANA_PIPS: 0.221,
 
-  /* Tope duro del golpe, en pips. Ver magnitudPips(). */
-  TOPE_PIPS: 60,
+  /* Tope duro del golpe, en pips. Medido: con 60 NO disparó ni una sola vez en 100.000 eventos,
+     así que se sube a 150 para que sea inequívocamente una red contra un desbocamiento y no un
+     límite que le pise el resultado al dado. Ver magnitudPips(). */
+  TOPE_PIPS: 150,
 
   /* Eventos por segundo (base). Cada evento es UNA decisión de mercado; puede imprimirse una vez
      (seco) o en ráfaga. IQ imprime ~10/s, pero eso en Firebase serían 300.000 escrituras por
@@ -125,11 +135,50 @@ const CAL = {
      Si algún día Firebase da para más, este es el único número que hay que subir. */
   EVENTOS_POR_SEGUNDO: 1.5,
 
-  /* Volatilidad lenta: los racimos. MEDIDO: la volatilidad realizada de un bloque de 10 s varía
-     2-2,5x dentro de un mismo minuto y 12,9x a lo largo de la sesión. v = 0,50 da e^(2,5·0,5·2)
-     ≈ 12,2 de recorrido a lo largo de la sesión. Ahí están los picos altos y los picos bajos. */
-  VOL_SIGMA: 0.5,
-  VOL_SEMIVIDA_S: 45, // cuánto tarda un estado de volatilidad en diluirse a la mitad
+  /* ═══ VOLATILIDAD EN CASCADA — v3 ═══
+     ANTES había UNA sola escala, de semivida 45 s. Eso hacía que el mercado se olvidara de si
+     estaba nervioso o tranquilo cada 2-3 minutos, y por tanto que CUALQUIER tramo de diez
+     minutos se pareciera a cualquier otro. Peor: yo creí ver memoria larga porque la
+     autocorrelación de |movimiento| daba +0,06 a los 5 minutos, y era falso. Con semivida 45 s
+     lo máximo posible a 300 s es 0,19·2^(-300/45) = 0,002. Los 0,06 los ponía la CURVA DEL DÍA:
+     como el precio se agita en la apertura y se calma al mediodía en TODAS las sesiones, aparece
+     correlación positiva en todos los retardos. Estacionalidad disfrazada de memoria.
+     Demostración: «suelo fijo 0,06 + AR-1 de amplitud 0,13» reproduce los OCHO retardos medidos
+     con error ≤ 0,015.
+
+     AHORA son TRES relojes que se multiplican, como en un mercado real: uno rápido para el
+     nerviosismo del momento, uno medio para las rachas de un cuarto de hora, y uno lento para el
+     humor de la tarde entera. Es la aproximación estándar de la cascada de volatilidad.
+     NADA de esto toca la dirección: sigma dice CUÁNTO se mueve, nunca HACIA DÓNDE. */
+  VOL_ESCALAS: [
+    { semividaS: 45, sd: 0.3 },    // el momento
+    { semividaS: 480, sd: 0.3 },   // 8 min — las rachas
+    { semividaS: 5400, sd: 0.26 }, // 90 min — el humor de la sesión
+  ],
+
+  /* Temperatura del día: días tranquilos y días salvajes. Se sortea una vez por jornada. Sin
+     esto todas las sesiones tenían prácticamente la misma energía, que es un patrón repetido. */
+  VOL_SD_DIA: 0.28,
+
+  /* Realimentación (ARCH): el golpe que ACABA de ocurrir empuja la volatilidad. Es lo que hace
+     que un pico de 60 pips DEJE ESTELA en vez de aparecer solo y desaparecer. Sin esto, una vela
+     gigante rodeada de velas normales se lee como un tick malo, no como una noticia.
+     Va sobre la innovación ln(golpe/mediana), que vale exactamente s·Z: media cero por
+     construcción, así que no infla ni desinfla la volatilidad media. */
+  VOL_REALIM: 0.03,
+  VOL_ARCH_SEMIVIDA_S: 150,
+
+  /* ASIMETRÍA DE LA VOLATILIDAD. En un mercado de verdad los nervios SUBEN DE GOLPE y BAJAN
+     DESPACIO: un susto altera el mercado en un segundo y tarda mucho más en calmarse. Antes la
+     estela era simétrica, y eso no pasa en ningún mercado. Ahora una sorpresa hacia arriba empuja
+     con toda su fuerza y una hacia abajo sólo con el 45 %.
+     Se resta VOL_ASIM_MEDIA = s·(1−0,45)/√(2π) = 1,13·0,55·0,39894 para que el empujón siga
+     teniendo MEDIA CERO y no infle la volatilidad general ni el recorrido del día. */
+  VOL_ASIMETRIA: 0.45,
+  VOL_ASIM_MEDIA: 0.2479,
+  /* Varianza que la estela añade al total, MEDIDA en el banco (0,0410). Se resta en el exponente
+     para que E[sigma²] siga valiendo 1 y la energía de la sesión no se mueva. */
+  VOL_ARCH_VAR: 0.041,
 
   /* Acoplamiento volatilidad→ritmo: cuando hay nervios, además de golpes más grandes, llegan
      más seguidos. Es real (volumen y volatilidad van de la mano). Exponente suave. */
@@ -153,9 +202,23 @@ const CAL = {
   SOBREPASO_MIN: 0.12, // 12 % de más
   SOBREPASO_MAX: 0.45,
 
-  /* Suelo y techo de la espera, para no martillear Firebase ni dejar el mercado muerto. */
-  ESPERA_MIN_MS: 60,
+  /* Suelo y techo de la espera. MEDIDO: el suelo de 60 ms le pisaba el resultado al dado entre el
+     6,5 % y el 10,4 % de las veces — y no por realismo, sino por proteger a Firebase. Baja a 5 ms,
+     que es sólo lo justo para que una espera de cero no haga girar el bucle en vacío: ahora manda
+     el dado en más del 99 % de los casos. El techo de 22 s nunca disparó, se deja de red. */
+  ESPERA_MIN_MS: 5,
   ESPERA_MAX_MS: 22000,
+
+  /* ═══ LA CURVA DEL DÍA, PERO SORTEADA ═══
+     Que el mercado se agite en la apertura y se duerma al mediodía es un hecho real, no un
+     invento. Lo que NO es real es que la curva sea IDÉNTICA todos los días: eso convierte un
+     hecho de mercado en un patrón repetido, y era lo único verdaderamente determinista que
+     quedaba dentro del horario. Ahora cada jornada sortea la suya:
+       · el pico se corre en el tiempo (unos ±25 min)
+       · lo pronunciada que es varía (hay días con una U marcadísima y días casi planos)
+     Y después se renormaliza ESA curva, la de hoy, para que el recorrido del día no cambie. */
+  CURVA_SD_DESPLAZAMIENTO_H: 0.42, // desviación del corrimiento del pico, en horas
+  CURVA_SD_FUERZA: 0.38,           // desviación de lo marcada que sale la U
 
   /* Rejilla de precio: 6 decimales = 0,01 pip. ANTES ERAN 5, y este es el ÚNICO cambio que va más
      allá de lo pedido. Razón medida: al conservar la energía con una cola pesada, la mediana del
@@ -199,49 +262,125 @@ const CURVA_NY = [
   [16.0, 1.9],   // subasta de cierre
 ];
 
-function factorSesion(hora, minuto) {
-  const t = hora + minuto / 60;
+/* La forma MEDIA. Ningún día se parece exactamente a ella: es la media de todos. */
+function curvaBase(t) {
   if (t <= CURVA_NY[0][0]) return CURVA_NY[0][1];
   for (let i = 1; i < CURVA_NY.length; i++) {
     if (t <= CURVA_NY[i][0]) {
       const [t0, v0] = CURVA_NY[i - 1];
       const [t1, v1] = CURVA_NY[i];
-      const f = (t - t0) / (t1 - t0);
-      return v0 + (v1 - v0) * f;
+      return v0 + (v1 - v0) * ((t - t0) / (t1 - t0));
     }
   }
   return CURVA_NY[CURVA_NY.length - 1][1];
 }
-/* Normalizador: hace que la media temporal de factor² sea 1, para que la curva reparta la
-   energía sin cambiar el total de la sesión. Se calcula una vez al arrancar. */
-const NORM_SESION = (() => {
+
+/* La curva DE HOY: la media, corrida en el tiempo y estirada o aplanada, ambas cosas sorteadas
+   con `crypto` al abrir la jornada. Así el hecho de mercado (hay una hora punta) se conserva
+   mientras deja de ser un patrón calcado día tras día. */
+let curvaDespl = 0;
+let curvaFuerza = 1;
+let curvaNorma = 1;
+
+function curvaCruda(t) {
+  return Math.max(0.05, 1 + (curvaBase(t - curvaDespl) - 1) * curvaFuerza);
+}
+
+function sorteaCurva() {
+  const l1 = 2.5 * CAL.CURVA_SD_DESPLAZAMIENTO_H;
+  curvaDespl = Math.max(-l1, Math.min(l1, CAL.CURVA_SD_DESPLAZAMIENTO_H * cryptoNormal()));
+  const l2 = 2.5 * CAL.CURVA_SD_FUERZA;
+  curvaFuerza = Math.max(
+    0.05,
+    1 + Math.max(-l2, Math.min(l2, CAL.CURVA_SD_FUERZA * cryptoNormal()))
+  );
+  /* Se renormaliza LA CURVA DE HOY —no una fija de fábrica— para que, salga como salga el
+     sorteo, su efecto medio sobre la energía valga exactamente 1 y el recorrido del día no
+     dependa de la forma que le haya tocado. */
   let s = 0, n = 0;
   for (let m = 8 * 60; m <= 16 * 60; m++) {
-    const f = factorSesion(Math.floor(m / 60), m % 60);
+    const f = curvaCruda(m / 60);
     s += f * f;
     n++;
   }
-  return Math.sqrt(s / n);
-})();
+  curvaNorma = Math.sqrt(s / n) || 1;
+}
+sorteaCurva(); // por si acaso: nunca se usa sin sortear
+
+function factorSesion(hora, minuto) {
+  return curvaCruda(hora + minuto / 60) / curvaNorma;
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 4 · LA VOLATILIDAD LENTA — de aquí salen los racimos
 // ══════════════════════════════════════════════════════════════════════════════
-/* h es un ruido gaussiano con memoria (AR-1). σ = exp(h − v²) está normalizado para que
-   E[σ²] = 1 exactamente: la capa reparte la energía en el tiempo, no la crea. */
-let volH = 0;
+/* Cada escala es un ruido gaussiano con su propia memoria (AR-1 en logaritmos). Se MULTIPLICAN,
+   que en logaritmos es sumarlas. Al restar la varianza total en el exponente, E[σ²] = 1 exacto:
+   las capas reparten la energía en el tiempo, no la crean. El recorrido del día no se mueve. */
+const volH = CAL.VOL_ESCALAS.map(() => 0);
+let volArch = 0;
+let volDia = 0;
 let volUltimoMs = Date.now();
+let volDiaActual = null;
+
+const VOL_VAR_TOTAL =
+  CAL.VOL_ESCALAS.reduce((s, e) => s + e.sd * e.sd, 0) +
+  CAL.VOL_SD_DIA * CAL.VOL_SD_DIA +
+  CAL.VOL_ARCH_VAR;
+
+function sorteaDia(fecha) {
+  if (fecha === volDiaActual) return;
+  volDiaActual = fecha;
+  const lim = 4 * CAL.VOL_SD_DIA;
+  volDia = Math.max(-lim, Math.min(lim, CAL.VOL_SD_DIA * cryptoNormal()));
+  sorteaCurva();
+  console.log(
+    `[NY] jornada ${fecha} — temperatura ×${Math.exp(volDia).toFixed(2)} · ` +
+    `hora punta corrida ${(curvaDespl * 60).toFixed(0)} min · U ×${curvaFuerza.toFixed(2)}`
+  );
+}
 
 function actualizaVolatilidad(ahoraMs) {
   const dt = Math.max(0, (ahoraMs - volUltimoMs) / 1000);
   volUltimoMs = ahoraMs;
-  const phi = Math.pow(0.5, dt / CAL.VOL_SEMIVIDA_S);
-  volH = phi * volH + Math.sqrt(Math.max(0, 1 - phi * phi)) * CAL.VOL_SIGMA * cryptoNormal();
-  // acotado a ±3 desviaciones: evita un absurdo de una cola de la cola
-  const lim = 3 * CAL.VOL_SIGMA;
-  if (volH > lim) volH = lim;
-  if (volH < -lim) volH = -lim;
-  return Math.exp(volH - CAL.VOL_SIGMA * CAL.VOL_SIGMA);
+  let suma = 0;
+  for (let i = 0; i < CAL.VOL_ESCALAS.length; i++) {
+    const e = CAL.VOL_ESCALAS[i];
+    const phi = Math.pow(0.5, dt / e.semividaS);
+    volH[i] = phi * volH[i] + Math.sqrt(Math.max(0, 1 - phi * phi)) * e.sd * cryptoNormal();
+    /* Red a ±4 desviaciones. Con ±3 saltaba el 0,04 % de las veces; con ±4 es, en la práctica,
+       inalcanzable: está para que un fallo numérico no mande la volatilidad a otro planeta, no
+       para recortarle nada al dado. */
+    const lim = 4 * e.sd;
+    if (volH[i] > lim) volH[i] = lim;
+    if (volH[i] < -lim) volH[i] = -lim;
+    suma += volH[i];
+  }
+  // la estela del golpe anterior también se diluye con el tiempo
+  volArch *= Math.pow(0.5, dt / CAL.VOL_ARCH_SEMIVIDA_S);
+  return Math.exp(suma + volArch + volDia - VOL_VAR_TOTAL);
+}
+
+/* LA ESTELA. Se llama DESPUÉS de cada golpe. ln(golpe/mediana) es exactamente s·Z, o sea la
+   sorpresa de ese golpe: positiva si salió más grande de lo normal, negativa si salió pequeño.
+   Media cero, así que ni infla ni desinfla la volatilidad media — sólo la mueve. Un zarpazo deja
+   el mercado nervioso un rato; una racha de ticks minúsculos lo adormece. */
+function estela(pipsAbs, medianaEfectiva) {
+  if (!(medianaEfectiva > 0) || !(pipsAbs > 0)) return;
+  /* Red a ±4·s en vez de ±2,5·s: antes recortaba la sorpresa el 1,3 % de las veces, ahora
+     prácticamente nunca. Un susto enorme entra entero. */
+  const lim = 4 * CAL.S_LOGNORMAL;
+  const sorpresa = Math.max(-lim, Math.min(lim, Math.log(pipsAbs / medianaEfectiva)));
+  /* Asimetría: el susto empuja con todo, la calma sólo arrastra con el 45 %. Los nervios suben
+     de golpe y bajan despacio, como en un mercado. Se descuenta la media para que el conjunto
+     siga sumando cero y no infle la volatilidad general. */
+  const empuje = sorpresa > 0 ? sorpresa : sorpresa * CAL.VOL_ASIMETRIA;
+  volArch += CAL.VOL_REALIM * (empuje - CAL.VOL_ASIM_MEDIA);
+  /* Red muy holgada: con la de antes saltaba el 7,4 % de las veces — era el tope que más le
+     pisaba el resultado al dado, y no había razón de mercado para él. */
+  const la = 12 * CAL.VOL_REALIM * CAL.S_LOGNORMAL;
+  if (volArch > la) volArch = la;
+  if (volArch < -la) volArch = -la;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -370,14 +509,20 @@ async function evento(ref, idx, pipsAbs, direccion, medianaEfectiva) {
 // 7 · HORARIO Y CONFIGURACIÓN
 // ══════════════════════════════════════════════════════════════════════════════
 function tsBogota() {
+  /* El formato sv-SE da «2026-08-17 09:45». Se parte en fecha y hora: la fecha hace falta para
+     saber cuándo empieza una jornada nueva y sortearle su temperatura. */
   const iso = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "America/Bogota",
     hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date());
-  const [hora, minuto] = iso.split(":").map(Number);
-  return { hora, minuto };
+  const [fecha, reloj] = iso.split(" ");
+  const [hora, minuto] = reloj.split(":").map(Number);
+  return { fecha, hora, minuto };
 }
 
 /* El flag se leía en CADA ciclo: a 0,388 ciclos/s eran ~11.000 lecturas por sesión, y al subir
@@ -428,7 +573,9 @@ function informe() {
     `(${(nImpresiones / seg).toFixed(2)} escrituras/s)\n` +
     `        mediana ${mediana.toFixed(3)} pips | media/mna ${(media / mediana).toFixed(2)} (IQ 1,90) | ` +
     `p99/mna ${(p99 / mediana).toFixed(1)} (IQ 13,6) | máx/mna ${(max / mediana).toFixed(1)} (IQ 14,6)\n` +
-    `        energía ${energia.toFixed(3)} pips²/s (objetivo 1,767) | vol σ ${Math.exp(volH - CAL.VOL_SIGMA ** 2).toFixed(2)}`
+    `        energía ${energia.toFixed(3)} pips²/s (objetivo 1,767) | σ ${Math.exp(
+      volH.reduce((s, h) => s + h, 0) + volArch + volDia - VOL_VAR_TOTAL
+    ).toFixed(2)} (momento ${Math.exp(volH[0]).toFixed(2)} · racha ${Math.exp(volH[1]).toFixed(2)} · humor ${Math.exp(volH[2]).toFixed(2)} · estela ${Math.exp(volArch).toFixed(2)} · día ${Math.exp(volDia).toFixed(2)})`
   );
   muestras.length = 0;
   nImpresiones = 0;
@@ -451,7 +598,7 @@ async function ciclo() {
       return;
     }
 
-    const { hora, minuto } = tsBogota();
+    const { fecha, hora, minuto } = tsBogota();
     const dentroHorario = (hora >= 8 && hora < 16) || (hora === 16 && minuto === 0);
     if (!dentroHorario) {
       console.log(`[NY] Fuera de 08:00-16:00 Bogotá (${hora}:${String(minuto).padStart(2, "0")})`);
@@ -459,9 +606,10 @@ async function ciclo() {
       return;
     }
 
+    sorteaDia(fecha); // jornada nueva ⇒ temperatura nueva
     const ahoraMs = Date.now();
     const sigma = actualizaVolatilidad(ahoraMs);
-    const fSes = factorSesion(hora, minuto) / NORM_SESION;
+    const fSes = factorSesion(hora, minuto); // ya viene normalizado con la curva de HOY
 
     // ── la última vela: sólo para saber el índice vigente ──────────────────────
     const ref = db.ref("market_data/M1");
@@ -481,6 +629,7 @@ async function ciclo() {
     const direccion = randomDirection();
 
     const r = await evento(ref, idx, pipsAbs, direccion, medEf);
+    estela(pipsAbs, medEf); // el golpe empuja la volatilidad: el pico deja rastro
 
     muestras.push(pipsAbs);
     nImpresiones += r.impresiones;
@@ -515,7 +664,8 @@ async function ciclo() {
    quiere apagado ordenado, va en index.js y coordinando los nueve módulos, no aquí. */
 
 console.log(
-  `🗽 [NY] Complemento Nueva York v2 — lognormal s=${CAL.S_LOGNORMAL}, mediana ${CAL.MEDIANA_PIPS} pips, ` +
-  `${CAL.EVENTOS_POR_SEGUNDO} eventos/s base, escritura directa. Azar: CSPRNG puro.`
+  `🗽 [NY] Complemento Nueva York v3 — lognormal s=${CAL.S_LOGNORMAL}, mediana ${CAL.MEDIANA_PIPS} pips, ` +
+  `${CAL.EVENTOS_POR_SEGUNDO} eventos/s base, volatilidad en cascada de 3 escalas + estela, ` +
+  `escritura directa. Azar: CSPRNG puro, dirección moneda 50/50 sin memoria.`
 );
 ciclo();
