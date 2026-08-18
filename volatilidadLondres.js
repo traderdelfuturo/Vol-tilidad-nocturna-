@@ -133,7 +133,7 @@ const CAL = {
      de la versión anterior (1,7674 pips²/s) con el resto de capas puestas. Bajar la mediana y
      alargar la cola es justo el cambio: antes todo medía ~1,9 pips; ahora la mayoría son ticks
      pequeños y de vez en cuando cae un golpe de 15-40 veces ese tamaño. */
-  MEDIANA_PIPS: 0.223,
+  MEDIANA_PIPS: 0.219,
 
   /* Tope duro del golpe, en pips. Medido: con 60 NO disparó ni una sola vez en 100.000 eventos,
      así que se sube a 150 para que sea inequívocamente una red contra un desbocamiento y no un
@@ -258,27 +258,15 @@ const CAL = {
 const PIP = 0.00010;
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 3 · LA SESIÓN DE NUEVA YORK — la forma del día
+// 3 · LA MAÑANA DE LONDRES — la forma de la sesión
 // ══════════════════════════════════════════════════════════════════════════════
 /* AVISO HONESTO, DOS COSAS.
    1) Esto NO sale del vídeo. El vídeo son 55 minutos, no da la forma de la jornada. Sale de cómo
       se comporta una sesión de verdad: apertura nerviosa, calma del mediodía, rampa de cierre.
-   2) La curva va clavada al reloj de BOGOTÁ —18:00 a 23:40—, que es cuando esta función corre.
-      Bogotá va a UTC−5 igual que la referencia de Tokio que uso, así que las horas cuadran.
-      Japón NO cambia la hora en todo el año, así que esta curva no se descuadra nunca.
-      Es la única sesión de las cinco que no sufre horarios de verano.
+   2) La curva va clavada al reloj de BOGOTÁ —02:00 a 07:10—, que es cuando esta función corre.
 
    Está normalizada para que su efecto medio sea 1: redistribuye la volatilidad a lo largo del
    día, no añade ni quita recorrido total. */
-/* LA NOCHE ASIÁTICA, HORA A HORA (reloj de Bogotá, que va a UTC−5 igual que el suyo).
-   No es una U como Nueva York: es el ciclo de Tokio, y tiene una forma muy suya.
-     18:00  sólo está abierta Sídney. Delgadísimo, casi nadie.
-     19:00  abre Tokio: pega un salto, pero todavía no es el máximo.
-     19:55  el fixing de Tokio. 20:15 EL PICO: Tokio, Hong Kong y Singapur abiertos a la vez.
-     21:30  EL ALMUERZO DE TOKIO. Es la hora más muerta de las veinticuatro.
-     22:00  vuelve la tarde japonesa, a media máquina.
-     23:20  ya se huele Londres y empieza a despertar otra vez. */
-/* (bloque de horas: ver la tabla de abajo)
 /* LA MAÑANA DE LONDRES, HORA A HORA (reloj de Bogotá). Aquí no hay pozo ni almuerzo: esta franja
    empieza arriba del todo y va bajando. Es la sesión más agresiva de las cuatro.
      02:00  ABRE LONDRES. Arranca ya en máximo.
@@ -286,8 +274,8 @@ const PIP = 0.00010;
      03:00  sigue a tope
      04:00  empieza a bajar, pero sigue muy activa
      06:00  la mañana londinense en velocidad de crucero
-     07:30  repunta: se acerca el premercado de Nueva York
-     08:00  entrega el turno */
+     07:00  Nueva York ya entró: Londres empieza a ceder
+     07:10  entrega el turno y se apaga */
 const CURVA_LON = [
   [2.0, 1.85],  // abre Londres, ya arriba
   [2.5, 1.95],  // ★ el pico de las 24 horas
@@ -296,8 +284,8 @@ const CURVA_LON = [
   [4.5, 1.1],
   [5.5, 0.85],
   [6.5, 0.72],
-  [7.5, 0.85],  // asoma Nueva York
-  [8.0, 0.95],  // entrega el turno
+  [7.0, 0.78],  // Nueva York ya entro a las 07:00: Londres empieza a ceder
+  [7.17, 0.7],  // 07:10 — entrega el turno y se apaga
 ];
 
 /* La forma MEDIA. Ningún día se parece exactamente a ella: es la media de todos. */
@@ -336,7 +324,7 @@ function sorteaCurva() {
      sorteo, su efecto medio sobre la energía valga exactamente 1 y el recorrido del día no
      dependa de la forma que le haya tocado. */
   let s = 0, n = 0;
-  for (let m = 2 * 60; m <= 8 * 60; m++) {
+  for (let m = 2 * 60; m <= 7 * 60 + 10; m++) {
     const f = curvaCruda(m / 60);
     s += f;
     n++;
@@ -659,9 +647,9 @@ async function ciclo() {
     }
 
     const { fecha, hora, minuto } = tsBogota();
-    const dentroHorario = (hora >= 2 && hora < 8) || (hora === 8 && minuto === 0);
+    const dentroHorario = (hora >= 2 && hora < 7) || (hora === 7 && minuto <= 10);
     if (!dentroHorario) {
-      console.log(`[LONDRES] Fuera de 02:00-08:00 Bogotá (${hora}:${String(minuto).padStart(2, "0")})`);
+      console.log(`[LONDRES] Fuera de 02:00-07:10 Bogotá (${hora}:${String(minuto).padStart(2, "0")})`);
       siguienteMs = 10000;
       return;
     }
@@ -729,4 +717,3 @@ console.log(
   `escritura directa. Azar: CSPRNG puro, dirección moneda 50/50 sin memoria.`
 );
 ciclo();
-
