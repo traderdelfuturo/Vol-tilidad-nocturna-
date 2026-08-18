@@ -36,7 +36,7 @@ const admin = require("./firebaseApp");
 const db = admin.database();
 
 // ── Configuración ────────────────────────────────────────────────────────────
-const HISTORY_LIMIT = 9600;   // velas que se conservan (9600 × 5 s ≈ 13,3 horas)
+const HISTORY_LIMIT = 17280;  // velas que se conservan (17.280 × 5 s = 24 horas exactas)
 const SECONDS_PER_BAR = 5;
 const FLUSH_MS = 250;         // cada cuánto se vuelca lo acumulado
 const MAX_FILL = 2400;        // tope de relleno por evento (2 h). Más allá, hueco histórico honesto.
@@ -119,9 +119,11 @@ async function rellenarHuecos(hastaB) {
 
 /* EL VOLCADO. Escribe de una sola vez el máximo, el mínimo y el cierre acumulados desde el
    volcado anterior. Va siempre dentro de la cola, así que nunca se solapa con otro. */
-async function volcar() {
-  const p = pend;
-  pend = null;
+async function volcar(p) {
+  /* Recibe lo que hay que volcar COMO PARÁMETRO, nunca leyendo la variable global. Leerla era
+     un fallo de pérdida de datos: entre que se encolaba el volcado y que la cola lo ejecutaba,
+     ya había entrado el primer precio de la vela siguiente — y al ejecutarse, lo pisaba. Se
+     perdía el primer precio de cada vela. */
   if (!p) return;
 
   // si se saltaron baldes desde el último escrito, primero se rellenan
@@ -166,10 +168,7 @@ function anotarPrecio(price) {
   if (pend && pend.b !== b) {
     const cerrado = pend;
     pend = null;
-    enCola(async () => {
-      pend = cerrado;
-      await volcar();
-    });
+    enCola(() => volcar(cerrado));
   }
   if (!pend) pend = { b, high: price, low: price, close: price };
   else {
@@ -181,7 +180,10 @@ function anotarPrecio(price) {
 
 // volcado periódico de lo acumulado
 setInterval(() => {
-  if (pend) enCola(volcar);
+  if (!pend) return;
+  const p = pend;
+  pend = null; /* se limpia ya: los extremos viven en Firebase y la transacción los amplía */
+  enCola(() => volcar(p));
 }, FLUSH_MS);
 
 /* GUARDIÁN DE CONTINUIDAD. Si el mercado se queda quieto y nadie escribe, los baldes siguen
