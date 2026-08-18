@@ -122,7 +122,7 @@ const CAL = {
      de la versión anterior (1,7674 pips²/s) con el resto de capas puestas. Bajar la mediana y
      alargar la cola es justo el cambio: antes todo medía ~1,9 pips; ahora la mayoría son ticks
      pequeños y de vez en cuando cae un golpe de 15-40 veces ese tamaño. */
-  MEDIANA_PIPS: 0.221,
+  MEDIANA_PIPS: 0.250,
 
   /* Tope duro del golpe, en pips. Medido: con 60 NO disparó ni una sola vez en 100.000 eventos,
      así que se sube a 150 para que sea inequívocamente una red contra un desbocamiento y no un
@@ -230,6 +230,11 @@ const CAL = {
      Para volver atrás basta poner 5 aquí. */
   DECIMALES: 6,
 
+  /* LA PERILLA DE TAMAÑO. En `config/tamano_ny`. 1 = como está calibrado, 2 = el doble, hasta 5.
+     Cambia SÓLO el tamaño, jamás el ritmo ni las pausas. Se relee cada 5 s junto al interruptor. */
+  TAMANO_MIN: 0.25,
+  TAMANO_MAX: 5,
+
   CONFIG_TTL_MS: 5000,     // cachear el flag de habilitación en vez de leerlo cada ciclo
   INFORME_CADA_MS: 300000, // informe de estadísticas cada 5 minutos
 };
@@ -250,7 +255,8 @@ const PIP = 0.00010;
    Está normalizada para que su efecto medio sea 1: redistribuye la volatilidad a lo largo del
    día, no añade ni quita recorrido total. */
 const CURVA_NY = [
-  [8.0, 0.55],   // premercado: poca cosa
+  [7.0, 0.45],   // 07:00 — PREMERCADO. Las mesas americanas encienden mientras Londres va por su tarde.
+  [8.0, 0.62],   // sigue flojo, pero ya se nota
   [9.5, 0.95],   // se despierta antes de la campana
   [9.75, 1.85],  // apertura: el pico del día
   [10.5, 1.35],
@@ -298,12 +304,12 @@ function sorteaCurva() {
      sorteo, su efecto medio sobre la energía valga exactamente 1 y el recorrido del día no
      dependa de la forma que le haya tocado. */
   let s = 0, n = 0;
-  for (let m = 8 * 60; m <= 16 * 60; m++) {
+  for (let m = 7 * 60; m <= 16 * 60; m++) {
     const f = curvaCruda(m / 60);
-    s += f * f;
+    s += f;
     n++;
   }
-  curvaNorma = Math.sqrt(s / n) || 1;
+  curvaNorma = (s / n) || 1;
 }
 sorteaCurva(); // por si acaso: nunca se usa sin sortear
 
@@ -389,14 +395,14 @@ function estela(pipsAbs, medianaEfectiva) {
 /* |Δ| = mediana × σ × factor_de_sesión × e^(s·Z). Lo que antes era un uniforme acotado entre
    0,624 y 3,216 ahora es una lognormal: la mayoría de las impresiones son pequeñas y de vez en
    cuando cae una enorme. Eso es un mercado. */
-function magnitudPips(sigma, fSesion) {
+function magnitudPips(sigma) {
   const z = cryptoNormal();
-  const x = CAL.MEDIANA_PIPS * sigma * fSesion * Math.exp(CAL.S_LOGNORMAL * z);
+  const x = CAL.MEDIANA_PIPS * tamano * sigma * Math.exp(CAL.S_LOGNORMAL * z);
   /* Tope de seguridad. La lognormal no está acotada por arriba: es su virtud y su peligro.
      El máximo típico de una sesión entera son ~38 pips, así que 60 no recorta nada de lo que
      el modelo produce de verdad — sólo impide que una cola de la cola mande el precio a otro
      planeta de un solo golpe. */
-  return Math.min(x, CAL.TOPE_PIPS);
+  return Math.min(x, CAL.TOPE_PIPS * tamano); // el techo estira con la perilla
 }
 
 /* Reparto de una ráfaga: fracciones decrecientes y desiguales que suman 1. Nada de 10 pasos
@@ -530,11 +536,29 @@ function tsBogota() {
    castigar la base de datos. */
 let cfgValor = null;
 let cfgMs = 0;
+
+/* LA PERILLA. Vive en Firebase, en `config/tamano_ny`. Se relee cada 5 s en la misma tanda que
+   el interruptor de encendido, así que no cuesta ni una petición extra. Cambiarla surte efecto
+   en cinco segundos, sin reiniciar nada. */
+let tamano = 1;
+
 async function habilitado() {
   const ahora = Date.now();
   if (cfgValor !== null && ahora - cfgMs < CAL.CONFIG_TTL_MS) return cfgValor;
-  const snap = await db.ref("config/auto_volatilidad_complemento_ny").once("value");
-  cfgValor = !!snap.val();
+  const [sFlag, sTam] = await Promise.all([
+    db.ref("config/auto_volatilidad_complemento_ny").once("value"),
+    db.ref("config/tamano_ny").once("value"),
+  ]);
+  cfgValor = !!sFlag.val();
+  const n = Number(sTam.val());
+  // si el nodo no existe, o trae texto, o un número absurdo, vale 1: nunca se rompe
+  const nuevo = isFinite(n) && n > 0
+    ? Math.min(CAL.TAMANO_MAX, Math.max(CAL.TAMANO_MIN, n))
+    : 1;
+  if (nuevo !== tamano) {
+    console.log("[NY] perilla de tamaño: x" + nuevo.toFixed(2) + " (antes x" + tamano.toFixed(2) + ")");
+    tamano = nuevo;
+  }
   cfgMs = ahora;
   return cfgValor;
 }
@@ -599,9 +623,9 @@ async function ciclo() {
     }
 
     const { fecha, hora, minuto } = tsBogota();
-    const dentroHorario = (hora >= 8 && hora < 16) || (hora === 16 && minuto === 0);
+    const dentroHorario = (hora >= 7 && hora < 16) || (hora === 16 && minuto === 0);
     if (!dentroHorario) {
-      console.log(`[NY] Fuera de 08:00-16:00 Bogotá (${hora}:${String(minuto).padStart(2, "0")})`);
+      console.log(`[NY] Fuera de 07:00-16:00 Bogotá (${hora}:${String(minuto).padStart(2, "0")})`);
       siguienteMs = 10000;
       return;
     }
@@ -624,8 +648,8 @@ async function ciclo() {
     }
 
     // ── el golpe: tamaño con cola, dirección moneda pura ───────────────────────
-    const medEf = CAL.MEDIANA_PIPS * sigma * fSes;
-    const pipsAbs = magnitudPips(sigma, fSes);
+    const medEf = CAL.MEDIANA_PIPS * tamano * sigma; /* la hora NO encoge el golpe */
+    const pipsAbs = magnitudPips(sigma);
     const direccion = randomDirection();
 
     const r = await evento(ref, idx, pipsAbs, direccion, medEf);
