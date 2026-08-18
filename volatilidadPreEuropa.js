@@ -133,7 +133,7 @@ const CAL = {
      de la versión anterior (1,7674 pips²/s) con el resto de capas puestas. Bajar la mediana y
      alargar la cola es justo el cambio: antes todo medía ~1,9 pips; ahora la mayoría son ticks
      pequeños y de vez en cuando cae un golpe de 15-40 veces ese tamaño. */
-  MEDIANA_PIPS: 0.230,
+  MEDIANA_PIPS: 0.263,
 
   /* Tope duro del golpe, en pips. Medido: con 60 NO disparó ni una sola vez en 100.000 eventos,
      así que se sube a 150 para que sea inequívocamente una red contra un desbocamiento y no un
@@ -282,23 +282,22 @@ const PIP = 0.00010;
    horas van en una escala estirada: 23:40 = 23,67 y las de después se les suma 24 (00:30 = 24,5,
    03:00 = 27, 07:00 = 31). Sin eso el reloj daría marcha atrás a medianoche y la curva se rompería.
      23:40  Asia cerrando, ya de retirada
-     00:30  EL POZO. Asia se fue y Europa no ha llegado. Lo más muerto de las 24 horas.
-     02:00  Fráncfort asoma
-     03:00  ABRE LONDRES. El pico de volatilidad más grande del día entero.
-     04:30  la mañana de Londres, a pleno rendimiento
-     07:00  se va calmando y empieza a oler a Nueva York */
+     00:15  EL POZO. Asia se fue y Europa no ha llegado. Lo más muerto de las 24 horas.
+     01:00  ★ SU PICO. Fráncfort abre y Europa despierta de golpe.
+     02:00  entra LONDRES —su propia función— y ésta le cede el protagonismo.
+     03:00  de aquí en adelante sólo ACOMPAÑA: el peso lo lleva Londres.
+     07:00  se apaga y deja paso a Nueva York. */
 const CURVA_PREEU = [
-  [23.67, 0.55], // Asia cerrando
-  [24.5, 0.38],  // ★ el pozo de la madrugada: no hay NADIE
-  [25.5, 0.42],
-  [26.0, 0.7],   // Fráncfort
-  [26.75, 1.15],
-  [27.0, 1.95],  // ★ ABRE LONDRES: el pico del día
-  [27.5, 1.7],
-  [28.5, 1.35],
-  [29.5, 1.15],
-  [30.5, 1.05],
-  [31.0, 1.1],   // ya se acerca Nueva York
+  [23.67, 0.55], // Asia cerrando, ya de retirada
+  [24.25, 0.38], // ★ EL POZO: Asia se fue y Europa no ha llegado. Nadie en el planeta.
+  [24.75, 0.85], // empiezan a encenderse las mesas europeas
+  [25.0, 1.85],  // ★ SU PICO — 01:00. Fráncfort abre y Europa despierta de golpe.
+  [25.5, 1.6],
+  [26.0, 1.15],  // 02:00 — entra LONDRES y esta función le cede el protagonismo
+  [27.0, 0.85],  // a partir de aquí sólo acompaña: el peso lo lleva Londres
+  [28.5, 0.72],
+  [30.0, 0.68],
+  [31.0, 0.7],   // 07:00 — se apaga y deja paso a Nueva York
 ];
 
 /* La forma MEDIA. Ningún día se parece exactamente a ella: es la media de todos. */
@@ -734,3 +733,4 @@ console.log(
   `escritura directa. Azar: CSPRNG puro, dirección moneda 50/50 sin memoria.`
 );
 ciclo();
+
