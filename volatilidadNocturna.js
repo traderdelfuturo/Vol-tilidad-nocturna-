@@ -131,7 +131,7 @@ const CAL = {
      de la versión anterior (1,7674 pips²/s) con el resto de capas puestas. Bajar la mediana y
      alargar la cola es justo el cambio: antes todo medía ~1,9 pips; ahora la mayoría son ticks
      pequeños y de vez en cuando cae un golpe de 15-40 veces ese tamaño. */
-  MEDIANA_PIPS: 0.279,
+  MEDIANA_PIPS: 0.265,
 
   /* Tope duro del golpe, en pips. Medido: con 60 NO disparó ni una sola vez en 100.000 eventos,
      así que se sube a 150 para que sea inequívocamente una red contra un desbocamiento y no un
@@ -162,12 +162,12 @@ const CAL = {
   VOL_ESCALAS: [
     { semividaS: 90, sd: 0.28 },   // el momento (Asia respira mas lento)
     { semividaS: 900, sd: 0.34 },  // 15 min — las rachas y los rangos
-    { semividaS: 9000, sd: 0.30 }, // 2,5 h — el humor de la noche
+    { semividaS: 9000, sd: 0.19 }, // 2,5 h — el humor de la noche (Asia varía menos entre noches)
   ],
 
   /* Temperatura del día: días tranquilos y días salvajes. Se sortea una vez por jornada. Sin
      esto todas las sesiones tenían prácticamente la misma energía, que es un patrón repetido. */
-  VOL_SD_DIA: 0.28,
+  VOL_SD_DIA: 0.18,
 
   /* Realimentación (ARCH): el golpe que ACABA de ocurrir empuja la volatilidad. Es lo que hace
      que un pico de 60 pips DEJE ESTELA en vez de aparecer solo y desaparecer. Sin esto, una vela
@@ -261,22 +261,24 @@ const PIP = 0.00010;
 /* LA NOCHE ASIÁTICA, HORA A HORA (reloj de Bogotá, que va a UTC−5 igual que el suyo).
    No es una U como Nueva York: es el ciclo de Tokio, y tiene una forma muy suya.
      18:00  sólo está abierta Sídney. Delgadísimo, casi nadie.
-     19:00  ABRE TOKIO. El único pico de verdad de la noche.
-     19:30  la mañana de Tokio, con movimiento.
+     19:00  abre Tokio: pega un salto, pero todavía no es el máximo.
+     19:55  el fixing de Tokio. 20:15 EL PICO: Tokio, Hong Kong y Singapur abiertos a la vez.
      21:30  EL ALMUERZO DE TOKIO. Es la hora más muerta de las veinticuatro.
      22:00  vuelve la tarde japonesa, a media máquina.
      23:20  ya se huele Londres y empieza a despertar otra vez. */
 const CURVA_ASIA = [
-  [18.0, 0.45],  // Sídney sola: el mercado casi no existe
-  [18.75, 0.62],
-  [19.0, 1.55],  // apertura de Tokio: el pico de la noche
+  [18.0, 0.42],   // Sídney sola: el mercado casi no existe
+  [18.75, 0.6],
+  [19.0, 1.15],   // abre Tokio: pega un salto, pero todavía NO es el máximo
   [19.5, 1.32],
-  [20.5, 1.0],
-  [21.0, 0.72],
-  [21.5, 0.4],   // almuerzo de Tokio: lo más muerto del día entero
-  [22.0, 0.55],
-  [22.75, 0.85],
-  [23.67, 1.25], // se acerca Londres
+  [19.92, 1.55],  // el fixing de Tokio (09:55 de Japón): mueve mucho
+  [20.25, 1.78],  // ★ EL PICO: Tokio + Hong Kong + Singapur, los tres a la vez
+  [20.75, 1.5],
+  [21.0, 1.1],
+  [21.5, 0.4],    // almuerzo de Tokio: lo más muerto de las 24 horas
+  [22.0, 0.58],
+  [22.75, 0.88],
+  [23.67, 1.25],  // se acerca Londres
 ];
 
 /* La forma MEDIA. Ningún día se parece exactamente a ella: es la media de todos. */
