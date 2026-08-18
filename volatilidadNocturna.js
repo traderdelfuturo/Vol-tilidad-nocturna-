@@ -239,6 +239,16 @@ const CAL = {
      Para volver atrás basta poner 5 aquí. */
   DECIMALES: 6,
 
+  /* ═══ LA PERILLA DE TAMAÑO ═══
+     Se lee de Firebase en `config/tamano_asia`. Un número: 1 = como está calibrado, 2 = el doble
+     de grande, 5 = el máximo. Cambia SÓLO el tamaño de los movimientos, jamás la velocidad ni el
+     ritmo ni las pausas: estira la regla con la que se mide lo que el dado saque, así que el azar
+     conserva exactamente la misma libertad, sólo que sobre un rango más largo.
+     Se relee cada 5 s junto al interruptor, sin coste extra. Si el nodo no existe o trae basura,
+     vale 1. Ojo: el recorrido de la noche crece con el CUADRADO — ×2 de tamaño es ×4 de energía. */
+  TAMANO_MIN: 0.25,
+  TAMANO_MAX: 5,
+
   CONFIG_TTL_MS: 5000,     // cachear el flag de habilitación en vez de leerlo cada ciclo
   INFORME_CADA_MS: 300000, // informe de estadísticas cada 5 minutos
 };
@@ -412,12 +422,12 @@ function estela(pipsAbs, medianaEfectiva) {
    japonés le da por sacar un zarpazo, lo saca: simplemente tirará menos veces. */
 function magnitudPips(sigma) {
   const z = cryptoNormal();
-  const x = CAL.MEDIANA_PIPS * sigma * Math.exp(CAL.S_LOGNORMAL * z);
+  const x = CAL.MEDIANA_PIPS * tamano * sigma * Math.exp(CAL.S_LOGNORMAL * z);
   /* Tope de seguridad. La lognormal no está acotada por arriba: es su virtud y su peligro.
      El máximo típico de una sesión entera son ~38 pips, así que 60 no recorta nada de lo que
      el modelo produce de verdad — sólo impide que una cola de la cola mande el precio a otro
      planeta de un solo golpe. */
-  return Math.min(x, CAL.TOPE_PIPS);
+  return Math.min(x, CAL.TOPE_PIPS * tamano); // el techo estira con la perilla
 }
 
 /* Reparto de una ráfaga: fracciones decrecientes y desiguales que suman 1. Nada de 10 pasos
@@ -551,11 +561,29 @@ function tsBogota() {
    castigar la base de datos. */
 let cfgValor = null;
 let cfgMs = 0;
+
+/* LA PERILLA. Vive en Firebase, en `config/tamano_asia`. Se relee cada 5 s en la misma tanda que
+   el interruptor de encendido, así que no cuesta ni una petición extra. Cambiarla surte efecto
+   en cinco segundos, sin reiniciar nada y sin tocar el código. */
+let tamano = 1;
+
 async function habilitado() {
   const ahora = Date.now();
   if (cfgValor !== null && ahora - cfgMs < CAL.CONFIG_TTL_MS) return cfgValor;
-  const snap = await db.ref("config/auto_volatilidad_noche").once("value");
-  cfgValor = !!snap.val();
+  const [sFlag, sTam] = await Promise.all([
+    db.ref("config/auto_volatilidad_noche").once("value"),
+    db.ref("config/tamano_asia").once("value"),
+  ]);
+  cfgValor = !!sFlag.val();
+  const n = Number(sTam.val());
+  // si el nodo no existe, o trae texto, o un número absurdo, vale 1: nunca se rompe
+  const nuevo = isFinite(n) && n > 0
+    ? Math.min(CAL.TAMANO_MAX, Math.max(CAL.TAMANO_MIN, n))
+    : 1;
+  if (nuevo !== tamano) {
+    console.log("[ASIA] perilla de tamaño: x" + nuevo.toFixed(2) + " (antes x" + tamano.toFixed(2) + ")");
+    tamano = nuevo;
+  }
   cfgMs = ahora;
   return cfgValor;
 }
@@ -645,7 +673,7 @@ async function ciclo() {
     }
 
     // ── el golpe: tamaño con cola, dirección moneda pura ───────────────────────
-    const medEf = CAL.MEDIANA_PIPS * sigma; /* la hora NO encoge el golpe */
+    const medEf = CAL.MEDIANA_PIPS * tamano * sigma; /* la hora NO encoge el golpe */
     const pipsAbs = magnitudPips(sigma);
     const direccion = randomDirection();
 
