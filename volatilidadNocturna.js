@@ -210,13 +210,31 @@ const CAL = {
   SOBREPASO_PROB: 0.25,
   SOBREPASO_MIN: 0.12, // 12 % de más
   SOBREPASO_MAX: 0.45,
-
-  /* Suelo y techo de la espera. MEDIDO: el suelo de 60 ms le pisaba el resultado al dado entre el
+  /* Suelo de la espera. MEDIDO: el suelo de 60 ms le pisaba el resultado al dado entre el
      6,5 % y el 10,4 % de las veces — y no por realismo, sino por proteger a Firebase. Baja a 5 ms,
      que es sólo lo justo para que una espera de cero no haga girar el bucle en vacío: ahora manda
-     el dado en más del 99 % de los casos. el techo lo fija ÉL: Asia nunca se queda del todo quieta más de un minuto. */
+     el dado en más del 99 % de los casos. */
   ESPERA_MIN_MS: 5,
-  ESPERA_MAX_MS: 60000,
+
+  /* ═══ v4 · SE ACABÓ EL TECHO DE ESPERA ═══
+     ANTES: `ESPERA_MAX_MS: 60000` recortaba cualquier espera que el dado pidiera por encima de un
+     minuto. Era un número puesto a mano, y ÉL lo quitó: la aleatoriedad manda del todo, también en
+     el CUÁNDO. Ya no hay ningún tope al número de veces que el mercado puede moverse ni al tiempo
+     que puede quedarse callado. (El tope de TAMAÑO sigue exactamente igual: `TOPE_PIPS` y la
+     perilla `TAMANO_MAX` no se tocan.)
+
+     ¿ES PELIGROSO? No, y el propio código ya lo impedía: la espera sale de
+     `cryptoExponential(Math.max(0.02, lambda))`, o sea que lambda NUNCA baja de 0,02 por segundo.
+     Con ese suelo, la espera media más larga posible son 50 segundos y la probabilidad de que el
+     dado pida más de diez minutos es de 6 entre un millón. El techo de 60 s no protegía de nada
+     que el suelo de lambda no protegiera ya: sólo le recortaba los silencios largos al dado.
+
+     LO QUE SÍ HACÍA FALTA RESOLVER: el ciclo relee el interruptor de Firebase CADA VEZ QUE
+     DESPIERTA. Sin techo, una espera larga dejaba la función sorda todo ese rato — usted apagaba
+     la sesión y no se enteraba. Por eso ahora la espera no se recorta, pero se DUERME A TROZOS de
+     20 segundos, y en cada trozo se relee el interruptor. El dado tiene libertad absoluta y la
+     función sigue obedeciendo al instante. */
+  TROZO_MS: 20000,
 
   /* ═══ LA CURVA DEL DÍA, PERO SORTEADA ═══
      Que el mercado se agite en la apertura y se duerma al mediodía es un hecho real, no un
@@ -506,7 +524,10 @@ const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 async function evento(ref, idx, pipsAbs, direccion, medianaEfectiva) {
   const total = direccion * pipsAbs * PIP;
 
-  if (cryptoRandomFloat() >= probRafaga(pipsAbs, medianaEfectiva)) {
+  /* v4: con la perilla `config/rafagas_asia` en 0, TODO evento es una impresión seca. El azar
+     puro, directo, sin textura ninguna. Nótese que va ANTES del dado de la ráfaga: con la perilla
+     apagada ese dado ni se tira, así que no se consume azar de más ni cambia nada aguas abajo. */
+  if (!rafagas || cryptoRandomFloat() >= probRafaga(pipsAbs, medianaEfectiva)) {
     const fin = await imprimir(ref, idx, total);
     return { impresiones: 1, fin };
   }
@@ -567,12 +588,29 @@ let cfgMs = 0;
    en cinco segundos, sin reiniciar nada y sin tocar el código. */
 let tamano = 1;
 
+/* ═══ LA PERILLA DE LAS RÁFAGAS ═══
+   Vive en Firebase, en `config/rafagas_asia`. Un solo número:
+     1  (o el nodo sin crear)  →  como está hoy: 68 % de golpes secos y 32 % en ráfaga.
+     0                         →  TODO seco. Cada evento es UNA impresión directa y nada más.
+
+   QUÉ APAGA EXACTAMENTE. La ráfaga NO añade ni un pip de recorrido —lo verifiqué en `evento()`:
+   los pesos del reparto suman 1 y el sobrepaso se devuelve entero, así que el neto es idéntico
+   al de una impresión seca—. Lo que apaga es la TEXTURA: las 2-5 impresiones seguidas en el mismo
+   sentido, y el sobrepaso que se pasa de largo y vuelve, que es lo que dibuja mecha DENTRO de un
+   mismo evento. Con la perilla en 0 queda el azar puro y desnudo: un dado, una impresión.
+
+   NO CAMBIA NADA MÁS: ni el tamaño, ni el ritmo, ni las pausas, ni la energía de la sesión.
+   Se relee cada 5 s junto al interruptor y la perilla de tamaño, así que no cuesta ni una
+   petición extra y surte efecto en cinco segundos, sin reiniciar. */
+let rafagas = true;
+
 async function habilitado() {
   const ahora = Date.now();
   if (cfgValor !== null && ahora - cfgMs < CAL.CONFIG_TTL_MS) return cfgValor;
-  const [sFlag, sTam] = await Promise.all([
+  const [sFlag, sTam, sRaf] = await Promise.all([
     db.ref("config/auto_volatilidad_noche").once("value"),
     db.ref("config/tamano_asia").once("value"),
+    db.ref("config/rafagas_asia").once("value"),
   ]);
   cfgValor = !!sFlag.val();
   const n = Number(sTam.val());
@@ -583,6 +621,14 @@ async function habilitado() {
   if (nuevo !== tamano) {
     console.log("[ASIA] perilla de tamaño: x" + nuevo.toFixed(2) + " (antes x" + tamano.toFixed(2) + ")");
     tamano = nuevo;
+  }
+  /* La perilla de ráfagas. Se apaga SÓLO con un cero explícito; cualquier otra cosa —el nodo sin
+     crear, un texto, un 1— la deja encendida. Así, si el nodo no existe, todo sigue como hoy. */
+  const rv = sRaf.val();
+  const nuevoR = !(rv === 0 || rv === "0" || rv === false);
+  if (nuevoR !== rafagas) {
+    console.log("[ASIA] perilla de ráfagas: " + (nuevoR ? "ENCENDIDAS (68% secas / 32% en ráfaga)" : "APAGADAS (todo seco, azar puro)"));
+    rafagas = nuevoR;
   }
   cfgMs = ahora;
   return cfgValor;
@@ -690,10 +736,10 @@ async function ciclo() {
     /* Se descuenta lo que ya tardó el evento (lecturas, transacciones, pausas de la ráfaga).
        Sin esto el reloj de Poisson arranca DESPUÉS del trabajo y el ritmo real queda por debajo
        del pedido, que a su vez baja la energía de la sesión. */
-    siguienteMs = Math.min(
-      CAL.ESPERA_MAX_MS,
-      Math.max(CAL.ESPERA_MIN_MS, espera - (Date.now() - t0))
-    );
+    /* v4: SIN TECHO. Lo que pida el dado, se respeta entero. Sólo se descuenta lo que ya tardó
+       el evento (lecturas, transacciones, pausas de la ráfaga): sin eso el reloj de Poisson
+       arrancaría DESPUÉS del trabajo y el ritmo real quedaría por debajo del pedido. */
+    siguienteMs = Math.max(CAL.ESPERA_MIN_MS, espera - (Date.now() - t0));
   } catch (error) {
     console.error("[ASIA] error en ciclo:", error && error.message ? error.message : error);
     siguienteMs = 5000;
@@ -701,8 +747,53 @@ async function ciclo() {
     /* El informe va en el finally, no en la rama de éxito: si estuviera arriba, tras la noche
        entera fuera de horario el primer informe del día dividiría entre una ventana de 16 h. */
     informe();
-    setTimeout(ciclo, siguienteMs);
+    programaSiguiente(siguienteMs);
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════════════════
+   v4 · EL SUEÑO A TROZOS — para que quitar el techo no deje la función sorda
+   ═══════════════════════════════════════════════════════════════════════════════════════════
+   El dado puede pedir la espera que quiera, sin recorte. Pero el ciclo relee el interruptor de
+   Firebase cada vez que despierta, así que una espera larga lo dejaría sin oír durante todo ese
+   rato: usted apagaría la sesión y seguiría escribiendo hasta que se le acabara la cuenta atrás.
+
+   Aquí la espera se respeta ENTERA, pero se duerme de veinte en veinte segundos. En cada trozo
+   sólo se hace una cosa: releer el interruptor. NO se imprime, NO se mueve el precio, NO se
+   consume azar — el reloj de Poisson no se entera de que existen los trozos, así que el ritmo
+   y la energía de la sesión son exactamente los mismos que antes.
+
+   Si el interruptor se apaga a media espera, se corta y se va al ciclo, que lo dirá por el log
+   y se quedará durmiendo en 5 s como siempre. */
+let restanteMs = 0;
+
+function programaSiguiente(ms) {
+  restanteMs = Math.max(0, ms);
+  siguienteTrozo();
+}
+
+function siguienteTrozo() {
+  if (restanteMs <= CAL.TROZO_MS) {
+    const t = restanteMs;
+    restanteMs = 0;
+    setTimeout(ciclo, t);
+    return;
+  }
+  restanteMs -= CAL.TROZO_MS;
+  setTimeout(async function () {
+    let vivo = true;
+    try {
+      vivo = await habilitado(); /* lo único que se hace a media espera */
+    } catch (e) {
+      /* si Firebase falla justo aquí, se sigue durmiendo: el ciclo ya tiene su propio try */
+    }
+    if (!vivo) {
+      restanteMs = 0;
+      setTimeout(ciclo, 0); /* que sea el ciclo quien lo diga y quien decida */
+      return;
+    }
+    siguienteTrozo();
+  }, CAL.TROZO_MS);
 }
 
 /* NO se registran manejadores de SIGTERM/SIGINT aquí. En Node, instalar un oyente de señal
@@ -713,8 +804,12 @@ async function ciclo() {
    quiere apagado ordenado, va en index.js y coordinando los nueve módulos, no aquí. */
 
 console.log(
-  `🏯 [ASIA] Nocturna · Asia v3 — lognormal s=${CAL.S_LOGNORMAL}, mediana ${CAL.MEDIANA_PIPS} pips, ` +
+  `🏯 [ASIA] Nocturna · Asia v4 — lognormal s=${CAL.S_LOGNORMAL}, mediana ${CAL.MEDIANA_PIPS} pips, ` +
   `${CAL.EVENTOS_POR_SEGUNDO} eventos/s base, volatilidad en cascada de 3 escalas + estela, ` +
-  `escritura directa. Azar: CSPRNG puro, dirección moneda 50/50 sin memoria.`
+  `escritura directa. Azar: CSPRNG puro, dirección moneda 50/50 sin memoria.\n` +
+  `            v4 · SIN TECHO DE ESPERA: el dado decide el cuándo sin recorte, y la espera se ` +
+  `duerme en trozos de ${CAL.TROZO_MS / 1000} s para no dejar de oír el interruptor.\n` +
+  `            v4 · PERILLAS EN FIREBASE: config/tamano_asia (tamaño, 0,25–5) · ` +
+  `config/rafagas_asia (1 = con ráfagas · 0 = todo seco, azar puro).`
 );
 ciclo();
